@@ -229,7 +229,7 @@ class App:
         return {
             f"ChatGPT — {os.environ.get('CHEAP_MODEL', 'gpt-5.5')} (OpenAI)": "gpt",
             f"Claude — {os.environ.get('CLAUDE_MODEL', 'claude-opus-4-8')} (Anthropic)": "claude",
-            f"Grok — {os.environ.get('GROK_MODEL', 'grok-4')} (xAI)": "grok",
+            f"Grok — {os.environ.get('GROK_MODEL', 'grok-4.20-0309-reasoning')} (xAI)": "grok",
         }
 
     def _refresh_provider_labels(self):
@@ -687,7 +687,7 @@ class App:
         ttk.Entry(frm, textvariable=self.key_grok, width=42, show="•").grid(
             row=3, column=1, sticky="w", **pad)
         ttk.Label(frm, text="Model:").grid(row=3, column=2, sticky="e", **pad)
-        self.model_grok = tk.StringVar(value=os.environ.get("GROK_MODEL", "grok-4"))
+        self.model_grok = tk.StringVar(value=os.environ.get("GROK_MODEL", "grok-4.20-0309-reasoning"))
         ttk.Entry(frm, textvariable=self.model_grok, width=16).grid(row=3, column=3, sticky="w", **pad)
 
         ttk.Label(frm, text="Default ⚡ provider:").grid(row=4, column=0, sticky="w", **pad)
@@ -959,7 +959,7 @@ class App:
             "ANTHROPIC_API_KEY": self.key_anthropic.get().strip(),
             "CLAUDE_MODEL": self.model_claude.get().strip() or "claude-opus-4-8",
             "GROK_API_KEY": self.key_grok.get().strip(),
-            "GROK_MODEL": self.model_grok.get().strip() or "grok-4",
+            "GROK_MODEL": self.model_grok.get().strip() or "grok-4.20-0309-reasoning",
             "AGENT_MODE": self.provider.get(),
         }
         save_env({k: v for k, v in values.items() if v})

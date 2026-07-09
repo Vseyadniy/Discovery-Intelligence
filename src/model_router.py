@@ -69,7 +69,7 @@ CHEAP_WEB_CAPABLE = True
 
 # ── Grok engine (xAI — OpenAI-compatible Chat Completions + Live Search) ─────
 GROK_BASE_URL = os.environ.get("GROK_BASE_URL") or "https://api.x.ai/v1"
-GROK_MODEL    = os.environ.get("GROK_MODEL") or "grok-4"
+GROK_MODEL    = os.environ.get("GROK_MODEL") or "grok-4.20-0309-reasoning"
 GROK_API_KEY  = os.environ.get("GROK_API_KEY", "")
 
 # ── Claude engine ─────────────────────────────────────────────────────────────
@@ -116,51 +116,66 @@ def _thinks(model: str) -> bool:
     return model.startswith("claude-opus-4-") or model in ("claude-sonnet-5", "claude-sonnet-4-6")
 
 
-def _run_cheap(system: str, user: str, web: bool = False, max_tokens: int = 16000) -> str:
-    # GPT-5.5 via the Responses API — the browsing path (web_search tool).
-    # STREAMED: a research pass generates for many minutes; a non-streaming call
-    # dies on idle HTTP timeouts. Reasoning also consumes output tokens, so the
-    # ceiling is generous — 4000 used to truncate real collector passes.
-    client = _cheap()
-    kwargs = dict(model=CHEAP_MODEL, instructions=system, input=user, max_output_tokens=max_tokens)
+def _run_responses(client, model: str, system: str, user: str, web: bool = False,
+                   max_tokens: int = 16000, on_event=None) -> str:
+    """Shared Responses-API runner (OpenAI GPT-5.5 and xAI Grok speak the same
+    protocol, web research included via the server-side web_search tool).
+
+    STREAMED for two reasons: a research pass generates for many minutes (a
+    non-streaming call dies on idle HTTP timeouts), and the stream carries live
+    tool activity — `on_event(action, detail)` receives ("searching", query),
+    ("reading", url) and ("writing", "") for the app's status line."""
+    kwargs = dict(model=model, instructions=system, input=user, max_output_tokens=max_tokens)
     if web and USE_WEB_SEARCH:
         kwargs["tools"] = [{"type": "web_search"}]
+    ev = on_event or (lambda a, d: None)
+    wrote = False
     with client.responses.stream(**kwargs) as s:
+        for event in s:
+            et = getattr(event, "type", "")
+            # .added fires when a tool call starts; .done carries the filled-in
+            # action (query/url) — xAI populates it only at .done
+            if et in ("response.output_item.added", "response.output_item.done"):
+                item = getattr(event, "item", None)
+                if getattr(item, "type", "") == "web_search_call":
+                    action = getattr(item, "action", None)
+                    url = getattr(action, "url", None) or ""
+                    query = getattr(action, "query", None) or ""
+                    if url:
+                        ev("reading", url)
+                    elif query or et == "response.output_item.added":
+                        ev("searching", query)
+            elif et == "response.output_text.delta" and not wrote:
+                wrote = True
+                ev("writing", "")
         resp = s.get_final_response()
     if getattr(resp, "status", None) == "incomplete":
         reason = getattr(getattr(resp, "incomplete_details", None), "reason", "unknown")
-        raise RuntimeError(f"{CHEAP_MODEL} response incomplete ({reason}) — "
+        raise RuntimeError(f"{model} response incomplete ({reason}) — "
                            f"raise max_output_tokens or retry")
     text = resp.output_text or ""
     if not text.strip():
-        raise RuntimeError(f"{CHEAP_MODEL} returned no text (status="
+        raise RuntimeError(f"{model} returned no text (status="
                            f"{getattr(resp, 'status', '?')}) — retry the step")
     return text
 
 
-def _run_grok(system: str, user: str, web: bool = False, max_tokens: int = 16000) -> str:
-    # Grok via Chat Completions (streamed). Web research uses xAI's server-side
-    # Live Search — enabled through the vendor extension `search_parameters`.
-    client = _grok()
-    kwargs = dict(
-        model=GROK_MODEL, max_tokens=max_tokens, stream=True,
-        messages=[{"role": "system", "content": system},
-                  {"role": "user", "content": user}],
-    )
-    if web and USE_WEB_SEARCH:
-        kwargs["extra_body"] = {"search_parameters": {"mode": "auto"}}
-    parts = []
-    for chunk in client.chat.completions.create(**kwargs):
-        if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
-            parts.append(chunk.choices[0].delta.content)
-    text = "".join(parts)
-    if not text.strip():
-        raise RuntimeError(f"{GROK_MODEL} returned no text — retry the step")
-    return text
+def _run_cheap(system: str, user: str, web: bool = False, max_tokens: int = 16000,
+               on_event=None) -> str:
+    return _run_responses(_cheap(), CHEAP_MODEL, system, user, web, max_tokens, on_event)
 
 
-def _run_claude(model: str, system: str, user: str, max_tokens: int = 16000, web: bool = False) -> str:
+def _run_grok(system: str, user: str, web: bool = False, max_tokens: int = 16000,
+              on_event=None) -> str:
+    # xAI's Agent Tools API (the old Live Search `search_parameters` was
+    # deprecated with HTTP 410) — same Responses protocol as OpenAI.
+    return _run_responses(_grok(), GROK_MODEL, system, user, web, max_tokens, on_event)
+
+
+def _run_claude(model: str, system: str, user: str, max_tokens: int = 16000,
+                web: bool = False, on_event=None) -> str:
     client = _claude()
+    ev = on_event or (lambda a, d: None)
     kwargs = dict(model=model, max_tokens=max_tokens, system=system)
     if _thinks(model):
         kwargs["thinking"] = {"type": "adaptive"}
@@ -169,8 +184,28 @@ def _run_claude(model: str, system: str, user: str, max_tokens: int = 16000, web
         kwargs["tools"] = [{"type": "web_search_20260209", "name": "web_search"}]
     messages = [{"role": "user", "content": user}]
     resp = None
+    wrote = False
     for _ in range(6):  # server-side web search can pause_turn; resume until done
         with client.messages.stream(messages=messages, **kwargs) as s:
+            for event in s:
+                t = getattr(event, "type", "")
+                if t == "content_block_start":
+                    b = getattr(event, "content_block", None)
+                    bt = getattr(b, "type", "")
+                    if bt == "server_tool_use":
+                        q = ""
+                        inp = getattr(b, "input", None)
+                        if isinstance(inp, dict):
+                            q = inp.get("query") or ""
+                        ev("searching", q)
+                    elif bt == "web_search_tool_result":
+                        c = getattr(b, "content", None)
+                        if isinstance(c, list) and c:
+                            ev("reading", getattr(c[0], "url", "") or "")
+                elif (t == "content_block_delta" and not wrote
+                      and getattr(getattr(event, "delta", None), "type", "") == "text_delta"):
+                    wrote = True
+                    ev("writing", "")
             resp = s.get_final_message()   # streamed: no HTTP timeout on long runs
         if resp.stop_reason != "pause_turn":
             break
@@ -179,25 +214,31 @@ def _run_claude(model: str, system: str, user: str, max_tokens: int = 16000, web
 
 
 # ── public interface: the orchestrator calls these ───────────────────────────
-def collect(system: str, user: str, max_tokens: int = 16000):
+def collect(system: str, user: str, max_tokens: int = 16000, on_event=None):
     """Run one collector (web research on). Returns (raw_text, engine_label)."""
     if MODE == "claude":
-        return _run_claude(CLAUDE_MODEL, system, user, max_tokens, web=USE_WEB_SEARCH), CLAUDE_MODEL
+        return _run_claude(CLAUDE_MODEL, system, user, max_tokens,
+                           web=USE_WEB_SEARCH, on_event=on_event), CLAUDE_MODEL
     if MODE == "grok":
-        return _run_grok(system, user, web=True, max_tokens=max_tokens), GROK_MODEL
-    return _run_cheap(system, user, web=True, max_tokens=max_tokens), CHEAP_MODEL
+        return _run_grok(system, user, web=True, max_tokens=max_tokens,
+                         on_event=on_event), GROK_MODEL
+    return _run_cheap(system, user, web=True, max_tokens=max_tokens,
+                      on_event=on_event), CHEAP_MODEL
 
 
-def verify(system: str, user: str, escalate: bool, max_tokens: int = 12000):
+def verify(system: str, user: str, escalate: bool, max_tokens: int = 12000, on_event=None):
     """Run the verifier (no browsing). `escalate` flags ambiguity/conflict/strategy. Returns (raw_text, engine_label)."""
     if MODE == "claude":
         model = ESCALATION_MODEL if (escalate and CLAUDE_MODEL != ESCALATION_MODEL) else CLAUDE_MODEL
-        return _run_claude(model, system, user, max_tokens, web=False), model
+        return _run_claude(model, system, user, max_tokens, web=False, on_event=on_event), model
     if escalate:
-        return _run_claude(ESCALATION_MODEL, system, user, max_tokens, web=False), ESCALATION_MODEL
+        return _run_claude(ESCALATION_MODEL, system, user, max_tokens,
+                           web=False, on_event=on_event), ESCALATION_MODEL
     if MODE == "grok":
-        return _run_grok(system, user, web=False, max_tokens=max_tokens), GROK_MODEL
-    return _run_cheap(system, user, web=False, max_tokens=max_tokens), CHEAP_MODEL
+        return _run_grok(system, user, web=False, max_tokens=max_tokens,
+                         on_event=on_event), GROK_MODEL
+    return _run_cheap(system, user, web=False, max_tokens=max_tokens,
+                      on_event=on_event), CHEAP_MODEL
 
 
 def banner() -> str:

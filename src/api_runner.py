@@ -36,6 +36,24 @@ _SYS_QUAL = ("You are a qualitative research designer on a market-intelligence "
              "pipeline. You do NOT browse and do NOT add facts — work only from "
              "the material in the prompt. Return STRICT JSON only — no prose.")
 
+_ACTION_LABEL = {"searching": "🔎 searching", "reading": "📄 reading",
+                 "writing": "🧠 analyzing & writing"}
+
+
+def _ev(log, prefix: str):
+    """Stream-event → status-line adapter: '<agent · company> — action: detail'."""
+    last = {"msg": None}
+
+    def cb(action: str, detail: str = ""):
+        d = str(detail or "")
+        if len(d) > 90:
+            d = d[:87] + "…"
+        msg = f"{prefix} — {_ACTION_LABEL.get(action, action)}" + (f": {d}" if d else "")
+        if msg != last["msg"]:
+            last["msg"] = msg
+            log(msg)
+    return cb
+
 
 def apply_env(values: dict[str, str]) -> None:
     """Apply key/model settings at runtime (the app saves .env, then calls this
@@ -97,7 +115,7 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
                   "discovery via web search NOW and return ONLY the JSON object that "
                   "belongs in companies.json — no prose, no file operations.")
         log(f"[api] discovery via {mr.banner()}")
-        raw, engine = mr.collect(_SYS, prompt)
+        raw, engine = mr.collect(_SYS, prompt, on_event=_ev(log, "🗺 Discovery"))
         data = mr.extract_json(raw)
         if not (data.get("companies") and data.get("segments")):
             raise SystemExit("discovery response lacked companies/segments — retry or "
@@ -140,9 +158,11 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
                     f"a research pass takes several minutes…")
                 with ThreadPoolExecutor(max_workers=2) as ex:
                     fa = ex.submit(mr.collect, _SYS,
-                                   _collector_prompt("a", brand, hint, schema, registry, corrections))
+                                   _collector_prompt("a", brand, hint, schema, registry, corrections),
+                                   16000, _ev(log, f"🟦 Collector A · {brand} ({n}/{len(todo)})"))
                     fb = ex.submit(mr.collect, _SYS,
-                                   _collector_prompt("b", brand, hint, schema, registry, corrections))
+                                   _collector_prompt("b", brand, hint, schema, registry, corrections),
+                                   16000, _ev(log, f"🟩 Collector B · {brand} ({n}/{len(todo)})"))
                     a_raw, engine = fa.result()
                     b_raw, _ = fb.result()
                 a = mr.extract_json(a_raw)
@@ -152,7 +172,9 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
                 b.update(entity=brand, collector="B")
                 _save(ar / f"{stem}_B.json", b)
                 log(f"[api] {brand}: collectors done in {int(time.time() - t0)}s; verifier…")
-                v_raw, _ = mr.verify(_SYS, _verifier_prompt(a, b, schema, corrections), escalate=False)
+                v_raw, _ = mr.verify(_SYS, _verifier_prompt(a, b, schema, corrections),
+                                     escalate=False,
+                                     on_event=_ev(log, f"🟨 Verifier · {brand} — merging A+B"))
                 rec = mr.extract_json(v_raw)
                 rec["entity"] = brand
                 _save(ar / f"{stem}_record.json", rec)
@@ -195,7 +217,8 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
                 + f" Prose in {meta['output_language']}; money as «N млн ₽»."
                 + (f" Allowed segments: {', '.join(segments)}." if segments else ""))
             log(f"[api] repair {e['entity']} ({len(issues)} issues)…")
-            raw, engine = mr.collect(_SYS, prompt)
+            raw, engine = mr.collect(_SYS, prompt,
+                                     on_event=_ev(log, f"🔧 Repair · {e['entity']}"))
             rec = mr.extract_json(raw)
             rec["entity"] = e["entity"]
             _save(e["path"], rec)
@@ -238,7 +261,8 @@ def run_next_qual_step(run_dir: Path, batch: int = 2, provider: str | None = Non
                 prompt += (f"\n\n## API MODE OVERRIDE\nYou have no repo access. Return "
                            f"ONLY the one-pager JSON object for «{brand}» — no prose, "
                            f"no file operations.")
-                raw, engine = mr.verify(_SYS_QUAL, prompt, escalate=False, max_tokens=16000)
+                raw, engine = mr.verify(_SYS_QUAL, prompt, escalate=False, max_tokens=16000,
+                                        on_event=_ev(log, f"📝 One-pager · {brand} ({n}/{len(todo)})"))
                 op = mr.extract_json(raw)
                 op["entity"] = brand
                 _save(qd / f"{e['stem']}_onepager.json", op)
@@ -271,7 +295,8 @@ def run_next_qual_step(run_dir: Path, batch: int = 2, provider: str | None = Non
                 + "source_fields from the record; hypotheses carry validated_if; "
                 + f"counts/enums per the checks above. Prose in "
                 + f"{meta_run['output_language']}. Return ONLY the corrected JSON.")
-            raw, engine = mr.verify(_SYS_QUAL, prompt, escalate=False, max_tokens=16000)
+            raw, engine = mr.verify(_SYS_QUAL, prompt, escalate=False, max_tokens=16000,
+                                    on_event=_ev(log, f"🔧 Qual repair · {e['entity']}"))
             op = mr.extract_json(raw)
             op["entity"] = e["entity"]
             _save(e["path"], op)
