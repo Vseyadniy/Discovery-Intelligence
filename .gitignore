@@ -1,0 +1,19 @@
+# secrets — never commit
+.env
+
+# runtime artifacts
+db/kb.sqlite
+outputs/review_cards/*.md
+!outputs/review_cards/.gitkeep
+
+# python
+__pycache__/
+*.pyc
+
+# build artifacts & local-only safety copies (git history supersedes versions/)
+dist/
+versions/
+Discovery Research.app/
+.venv/
+.DS_Store
+design/.DS_Store

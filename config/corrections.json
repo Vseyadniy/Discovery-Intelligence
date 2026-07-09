@@ -1,0 +1,12 @@
+{
+  "project_id": "discovery-ru-infra-2026-07",
+  "rules": [
+    {
+      "correction_id": "example-0001",
+      "scope": "project",
+      "field": "revenue",
+      "pattern": "revenue sourced from list-org.com or rusprofile.ru when a bo.nalog.ru figure exists",
+      "rule": "Always prefer the filed bo.nalog.ru (ГИР БО) figure over aggregator estimates. Aggregators lag and round."
+    }
+  ]
+}

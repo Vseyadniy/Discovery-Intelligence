@@ -1,0 +1,60 @@
+{
+  "entity": "Zyfra",
+  "entity_match": {
+    "entity_type": "group",
+    "confidence": "medium",
+    "note": "Official site confirms the brand/group and ООО «Цифра» footer, but no registry/INN source was opened; keep entity review open."
+  },
+  "needs_review": true,
+  "fields": {
+    "brand_name": {
+      "value": "Zyfra / ГК «Цифра»",
+      "confidence": "high",
+      "source": "https://www.zyfra.com/ru/",
+      "snippet": "Мы — группа компаний «Цифра»"
+    },
+    "legal_entity_name": {
+      "value": "ООО «Цифра»",
+      "confidence": "medium",
+      "source": "https://www.zyfra.com/ru/",
+      "snippet": "© 2026 Все права защищены. ООО «Цифра».",
+      "assumptions": "Official-site footer only; confirm by ЕГРЮЛ/Rusprofile before client use."
+    },
+    "website": {
+      "value": "https://www.zyfra.com/ru/",
+      "confidence": "high",
+      "source": "https://www.zyfra.com/ru/",
+      "snippet": "info@zyfra.com"
+    },
+    "segment": {
+      "value": "AI/ML / Industrial enterprise AI automation software",
+      "confidence": "high",
+      "source": "https://www.cnews.ru/news/line/2025-06-04_gk_vestlink_v_partnerstve",
+      "snippet": "инструментом для оптимизации производственных процессов и повышения общей эффективности работы предприятий"
+    },
+    "description": {
+      "value": "Russian industrial software group building digital products and an industrial data platform for production management, analytics, MES and AI-enabled automation.",
+      "confidence": "high",
+      "source": "https://www.zyfra.com/ru/",
+      "snippet": "Создаём цифровые продукты для управления тяжёлой промышленностью."
+    },
+    "key_products": {
+      "value": "Zyfra Industrial IoT Platform, Конструктор MES, Диспетчер, карьерная роботизация, роботизированное бурение, Балансы, Лаборатория качества.",
+      "confidence": "high",
+      "source": "https://www.zyfra.com/ru/",
+      "snippet": "Zyfra Industrial IoT Platform; Цифра. Конструктор MES; Цифра. Диспетчер; Цифра. Роботизация буровых станков"
+    },
+    "latest_news": {
+      "value": "2025-06-04: CNews reported WestLink and Zyfra presenting an AI-based Digital Manager for industry on the ZIIoT platform.",
+      "confidence": "medium",
+      "source": "https://www.cnews.ru/news/line/2025-06-04_gk_vestlink_v_partnerstve",
+      "snippet": "представила «Цифрового управленца» для промышленности на базе ИИ",
+      "year": 2025
+    }
+  },
+  "review_flags": [
+    "inn: blank; no live registry source opened",
+    "revenue: blank; no bo.nalog.ru or equivalent filed revenue source opened",
+    "headcount: blank; no opened source"
+  ]
+}

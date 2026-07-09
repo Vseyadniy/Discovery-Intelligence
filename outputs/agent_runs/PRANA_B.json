@@ -1,0 +1,25 @@
+{
+  "entity": "PRANA",
+  "collector": "B",
+  "fields": {
+    "description": {
+      "value": "Third-party coverage describes PRANA as a Russian IIoT predictive analytics and remote monitoring system developed by ROTEC.",
+      "source": "https://en.wikipedia.org/wiki/PRANA_%28system%29",
+      "snippet": "PRANA is the first Russia's predictive analytics and remote monitoring IIoT system. It was developed by ROTEC JSC",
+      "confidence": "medium"
+    },
+    "segment": {
+      "value": "AI/ML / Industrial enterprise AI automation software",
+      "source": "https://en.wikipedia.org/wiki/PRANA_%28system%29",
+      "snippet": "new version ... featuring elements of artificial intelligence and machine learning",
+      "confidence": "medium"
+    },
+    "latest_news": {
+      "value": "Third-party page states PRANA switched to Yandex ClickHouse in 2021 and monitored more than 130 sophisticated industrial equipment units as of 2021.",
+      "source": "https://en.wikipedia.org/wiki/PRANA_%28system%29",
+      "snippet": "In 2021, PRANA switched over to Yandex ClickHouse ... monitored more than 130 pieces",
+      "confidence": "medium",
+      "year": 2021
+    }
+  }
+}

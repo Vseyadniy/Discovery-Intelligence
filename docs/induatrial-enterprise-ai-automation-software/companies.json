@@ -1,0 +1,77 @@
+[
+  {
+    "brand": "Zyfra / ГК «Цифра»",
+    "reason": "Крупный российский разработчик решений для цифровизации промышленности, ZIIoT, MES, диспетчеризация, роботизация и прикладной ИИ для промышленных процессов.",
+    "source": "https://www.zyfra.com/ru/"
+  },
+  {
+    "brand": "Datana",
+    "reason": "Нишевой промышленный AI/ML-вендор: APC/СУУТП, компьютерное зрение, роботизация, аналитика для горнодобычи, металлургии, химии/нефти и энергетики.",
+    "source": "https://datana.ru/"
+  },
+  {
+    "brand": "Ctrl2GO",
+    "reason": "Поставщик решений анализа данных для промышленности: предиктивная и прескриптивная аналитика, SmartMaintenance, цифровые паспорта изделий.",
+    "source": "https://www.ctrl2go.com/"
+  },
+  {
+    "brand": "PRANA",
+    "reason": "Система предиктивной аналитики и удалённого мониторинга промышленного оборудования, разработанная ROTEC JSC.",
+    "source": "https://prana-system.com/"
+  },
+  {
+    "brand": "Linkage / ГК «ВестЛинк»",
+    "reason": "Экосистема AI/data-driven управления предприятием; совместно с ГК «Цифра» представлена как «Цифровой управленец» для промышленности.",
+    "source": "https://westlink.group/"
+  },
+  {
+    "brand": "Cognitive Pilot",
+    "reason": "AI-системы автономного управления для сельхозтехники и промышленной роботизации, сильный специализированный игрок на стыке CV/робототехники.",
+    "source": "https://cognitivepilot.com/"
+  },
+  {
+    "brand": "PIX Robotics",
+    "reason": "Крупный российский игрок enterprise automation/RPA с AI-компонентами; релевантен для автоматизации процессов промышленных предприятий.",
+    "source": "https://pix.ru/"
+  },
+  {
+    "brand": "Primo RPA",
+    "reason": "Российская платформа роботизации бизнес-процессов для крупных предприятий, включая промышленность и госсектор.",
+    "source": "https://primo-rpa.ru/"
+  },
+  {
+    "brand": "Robin",
+    "reason": "RPA/enterprise automation платформа для автоматизации рутинных процессов крупных организаций; покрывает сильный сегмент корпоративной автоматизации.",
+    "source": "https://robin-platform.ru/"
+  },
+  {
+    "brand": "Sherpa RPA",
+    "reason": "Российская RPA-платформа для автоматизации бизнес-процессов, нишевый игрок enterprise automation.",
+    "source": "https://sherparpa.ru/"
+  },
+  {
+    "brand": "Infomaximum / Proceset",
+    "reason": "Process mining и аналитика бизнес-процессов для оптимизации операций крупных предприятий; смежный слой AI/process automation.",
+    "source": "https://proceset.com/"
+  },
+  {
+    "brand": "Loginom",
+    "reason": "Low-code аналитическая платформа для обработки данных, ML-моделирования и промышленной/корпоративной аналитики.",
+    "source": "https://loginom.ru/"
+  },
+  {
+    "brand": "Polymatica",
+    "reason": "BI/advanced analytics платформа с ML/AI-сценариями для корпоративной аналитики и автоматизации решений.",
+    "source": "https://polymatica.ru/"
+  },
+  {
+    "brand": "GreenData",
+    "reason": "Low-code платформа для корпоративной автоматизации и интеллектуальных приложений на данных.",
+    "source": "https://greendata.store/"
+  },
+  {
+    "brand": "Visillect",
+    "reason": "Computer vision / video analytics вендор; релевантен как нишевой CV-слой для промышленного контроля и автоматизации.",
+    "source": "https://visillect.com/"
+  }
+]

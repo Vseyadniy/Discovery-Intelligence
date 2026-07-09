@@ -1,0 +1,16 @@
+seed_name,inn,website,subsector,hint
+Cloud.ru,7736279160,cloud.ru,IaaS/GPU,ex-SberCloud; brand over ООО «Облачные технологии»
+Selectel,7810962785,selectel.ru,IaaS/GPU,cloud+bare-metal GPU; АО «Селектел»
+K2 Cloud,7701829110,k2.cloud,IaaS/GPU,brand ≠ legal (АО «К2 Интеграция»)
+MWS,7707767501,mws.ru,IaaS/GPU,MTS brand; splits across several INNs
+Timeweb Cloud,7810945525,timeweb.cloud,IaaS/GPU,cloud arm of Timeweb
+Arenadata,7713468845,arenadata.tech,PaaS/DP-MDB,public group (MOEX DATA); appears on Kuber/DP-MDB/DP-tools
+Postgres Pro,7729445882,postgrespro.ru,PaaS/DP-MDB,brand ≠ legal (ООО «ППГ»)
+Tantor Labs,9701183207,tantorlabs.ru,PaaS/DP-MDB,Astra Group subsidiary
+СберТех,7736632467,sbertech.ru,PaaS/DP-MDB,DB is one line of a large company (Platform V)
+Diasoft,7715560268,diasoft.ru,PaaS/DP-MDB,core = banking software; DB is adjacent
+Positive Technologies,7718668887,ptsecurity.com,Security/AppSec,public group (MOEX POSI); AppSec is one segment
+Solar,9724113301,rt-solar.ru,Security/AppSec,Rostelecom arm; revenue not in map (honest blank)
+Вебмониторэкс,7735194651,webmonitorx.ru,Security/AppSec,pure-play WAF/API vendor
+SolidWall,7714944046,solidwall.ru,Security/AppSec,brand «Солидсофт»; parent Яндекс (verify)
+Servicepipe,7708257951,servicepipe.ru,Security/AppSec,anti-DDoS/WAF vendor

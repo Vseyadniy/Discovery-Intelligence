@@ -1,0 +1,5 @@
+# onepager_blocks.yaml — extra one-pager blocks (managed by the app,
+# tab «3 · Settings» → One-pager layout). Each block is requested from the
+# researcher in every qual prompt and rendered after the core sections.
+
+blocks: []

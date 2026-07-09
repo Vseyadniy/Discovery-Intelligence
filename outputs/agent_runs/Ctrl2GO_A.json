@@ -1,0 +1,56 @@
+{
+  "entity": "Ctrl2GO",
+  "collector": "A",
+  "fields": {
+    "brand_name": {
+      "value": "Ctrl2GO",
+      "source": "https://www.ctrl2go.com/",
+      "snippet": "Ctrl2GO является одним из крупнейших поставщиков решений для анализа данных в России",
+      "confidence": "high"
+    },
+    "website": {
+      "value": "https://www.ctrl2go.com/",
+      "source": "https://www.ctrl2go.com/",
+      "snippet": "info@ctrl2go.com",
+      "confidence": "high"
+    },
+    "entity_type": {
+      "value": "brand",
+      "source": "https://www.ctrl2go.com/",
+      "snippet": "В состав группы компаний входят",
+      "confidence": "medium"
+    },
+    "confidence_entity_match": {
+      "value": "medium",
+      "source": "https://www.ctrl2go.com/",
+      "snippet": "Ctrl2GO является одним из крупнейших поставщиков решений для анализа данных в России",
+      "confidence": "medium",
+      "assumptions": "Legal entity/INN not confirmed from opened source."
+    },
+    "description": {
+      "value": "Russian data-analysis and industrial digital-product vendor focused on industry use cases.",
+      "source": "https://www.ctrl2go.com/",
+      "snippet": "специализируется на разработке и внедрении цифровых продуктов в промышленности",
+      "confidence": "high"
+    },
+    "segment": {
+      "value": "AI/ML / Industrial enterprise AI automation software",
+      "source": "https://www.ctrl2go.com/",
+      "snippet": "Предиктивная аналитика; Прескриптивная аналитика",
+      "confidence": "high"
+    },
+    "key_products": {
+      "value": "CLASS cloud platform, SmartMaintenance, digital product passport/formulary, RiskAgro, C2G Blockchain Platform.",
+      "source": "https://www.ctrl2go.com/",
+      "snippet": "Облачная программная платформа CLASS; SmartMaintenance; Цифровой формуляр (паспорт) изделия",
+      "confidence": "high"
+    },
+    "latest_news": {
+      "value": "2025-02-12: Ctrl2GO published a note on differentiated fertilizer application; 2025-01-22: Lokotech-Service and Ctrl2GO completed phase two of a digital product passport project.",
+      "source": "https://www.ctrl2go.com/",
+      "snippet": "12 февраля 2025 Cистема дифференцированного внесения удобрений; 22 января 2025 ООО «ЛокоТех-Сервис» ... второй этап проекта «Цифровой формуляр»",
+      "confidence": "medium",
+      "year": 2025
+    }
+  }
+}

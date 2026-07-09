@@ -1,0 +1,43 @@
+# depth_levels.yaml — how deeply to explore a market.
+# The app and the run-prompt builder read this; the architect tunes it here.
+# `coverage_target` is the share of the real market the cohort should represent.
+
+levels:
+  superficial:
+    label: "Superficial — large players only"
+    coverage_target: "the major players only"
+    min_revenue_rub: null
+    include: >
+      Only the large, well-known leaders of the market. Skip niche, regional and
+      long-tail vendors.
+    exclude: >
+      Niche players, regional-only vendors, and any company that is not a recognised
+      market leader.
+    typical_count: "roughly 5–10 companies"
+
+  medium:
+    label: "Medium — leaders + strong niche/regional (~80%)"
+    coverage_target: "up to ~80% of the market"
+    min_revenue_rub: null
+    include: >
+      Large players, plus niche specialists and strong regional players. Aim to cover
+      ~80% of the market by revenue/share. IMPORTANT: 80% is a coverage target, not a
+      company count — size the cohort to the market. Fragmented / diverse markets
+      (many small players, franchises, regional networks) need MORE companies to reach
+      80%; do not stop at a round 15 if the tail is long. Judge coverage by share, and
+      say in companies.json roughly what share the cohort represents.
+    exclude: >
+      Long-tail micro-vendors and one-person shops.
+    typical_count: "15–30 for concentrated markets; 30–50+ for fragmented/diverse ones"
+
+  detailed:
+    label: "Detailed — all real players (~90–95%)"
+    coverage_target: "up to ~90–95% of the market"
+    min_revenue_rub: 25000000        # 25 млн ₽ — filed revenue floor
+    include: >
+      All genuine players in the market, aiming to cover ~90–95% of it.
+    exclude: >
+      One-person companies, and any company with filed annual revenue below
+      25 000 000 ₽ (25 млн руб.). Confirm the revenue floor from bo.nalog.ru before
+      including a borderline company.
+    typical_count: "as many as the market has (often 30–80+)"

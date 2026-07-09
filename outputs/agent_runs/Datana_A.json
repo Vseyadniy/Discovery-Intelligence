@@ -1,0 +1,67 @@
+{
+  "entity": "Datana",
+  "collector": "A",
+  "fields": {
+    "brand_name": {
+      "value": "Datana",
+      "source": "https://datana.ru/",
+      "snippet": "Datana — цифровизация производства, Индустрия 4.0, APC, СУУТП, компьютерное зрение",
+      "confidence": "high"
+    },
+    "legal_entity_name": {
+      "value": "ООО «Датана»",
+      "source": "https://datana.ru/",
+      "snippet": "ООО “Датана”",
+      "confidence": "high"
+    },
+    "inn": {
+      "value": "9717079152",
+      "source": "https://datana.ru/",
+      "snippet": "ИНН 9717079152",
+      "confidence": "high"
+    },
+    "website": {
+      "value": "https://datana.ru/",
+      "source": "https://datana.ru/",
+      "snippet": "info@datana.ru",
+      "confidence": "high"
+    },
+    "entity_type": {
+      "value": "legal_entity",
+      "source": "https://datana.ru/",
+      "snippet": "ООО “Датана”",
+      "confidence": "high"
+    },
+    "confidence_entity_match": {
+      "value": "high",
+      "source": "https://datana.ru/",
+      "snippet": "ООО “Датана”; ИНН 9717079152",
+      "confidence": "high"
+    },
+    "description": {
+      "value": "Industrial AI/automation vendor for mining, metallurgy, chemical/oil and energy use cases.",
+      "source": "https://datana.ru/",
+      "snippet": "Мы автономизируем и роботизируем, цифровизируем и оптимизируем",
+      "confidence": "high"
+    },
+    "segment": {
+      "value": "AI/ML / Industrial enterprise AI automation software",
+      "source": "https://datana.ru/",
+      "snippet": "СУУТП и ML, математика; CV - аналитика; Роботизация",
+      "confidence": "high"
+    },
+    "key_products": {
+      "value": "Datana APC, Datana Shopfloor, Датана Поток, Датана Искра, Датана Арма, Датана КИТТ, Datana Sense.",
+      "source": "https://datana.ru/produkty/datana-apc/index.html",
+      "snippet": "Datana APC ... разработка и внедрение систем усовершенствованного управления технологическими процессами",
+      "confidence": "high"
+    },
+    "latest_news": {
+      "value": "2025: Datana lists awards/recognition for mining-equipment productivity and Nornickel deployment of APC on Vanyukov furnaces.",
+      "source": "https://datana.ru/",
+      "snippet": "Благодарность от Норникеля, 2025 г. За внедрение СУУТП на печах Ванюкова",
+      "confidence": "medium",
+      "year": 2025
+    }
+  }
+}

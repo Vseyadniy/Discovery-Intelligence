@@ -1,0 +1,70 @@
+{
+  "entity": "Linkage / WestLink",
+  "collector": "A",
+  "fields": {
+    "brand_name": {
+      "value": "Linkage / Цифровой управленец Linkage",
+      "source": "https://westlink.group/",
+      "snippet": "Цифровой управленец Linkage",
+      "confidence": "high"
+    },
+    "legal_entity_name": {
+      "value": "Группа компаний «ВестЛинк»",
+      "source": "https://westlink.group/",
+      "snippet": "Группа компаний «ВестЛинк»",
+      "confidence": "medium",
+      "assumptions": "Official site presents group name and INN; exact legal form should be confirmed in registry."
+    },
+    "inn": {
+      "value": "9705074872",
+      "source": "https://westlink.group/",
+      "snippet": "9705074872 ИНН",
+      "confidence": "medium",
+      "assumptions": "Official site footer, not registry."
+    },
+    "website": {
+      "value": "https://westlink.group/",
+      "source": "https://westlink.group/",
+      "snippet": "office@westlink-group.com",
+      "confidence": "high"
+    },
+    "entity_type": {
+      "value": "product",
+      "source": "https://westlink.group/",
+      "snippet": "Цифровой управленец Linkage ... экосистема продуктов для комплексного управления предприятием",
+      "confidence": "high"
+    },
+    "confidence_entity_match": {
+      "value": "medium",
+      "source": "https://westlink.group/",
+      "snippet": "Группа компаний «ВестЛинк» ... ИНН 9705074872",
+      "confidence": "medium",
+      "assumptions": "Product belongs to WestLink group; exact legal entity still needs registry confirmation."
+    },
+    "description": {
+      "value": "Enterprise AI/data-driven management ecosystem for business and industrial-process management automation.",
+      "source": "https://westlink.group/",
+      "snippet": "экосистема продуктов для комплексного управления предприятием на основе данных",
+      "confidence": "high"
+    },
+    "segment": {
+      "value": "AI/ML / Industrial enterprise AI automation software",
+      "source": "https://westlink.group/",
+      "snippet": "Corporate AI; Digital twins; Low code / no code AI",
+      "confidence": "medium"
+    },
+    "key_products": {
+      "value": "Linkage ABI, Linkage EPM, Linkage Contact Center, implementation and support services.",
+      "source": "https://westlink.group/",
+      "snippet": "Linkage ABI; Linkage EPM; Linkage Contact Center",
+      "confidence": "high"
+    },
+    "latest_news": {
+      "value": "2025: WestLink says it presents Linkage as an ecosystem for data-driven enterprise management and AI-assisted operational management.",
+      "source": "https://westlink.group/",
+      "snippet": "2025 ВестЛинк представляет экосистему по работе с данными Цифровой управленец Linkage",
+      "confidence": "medium",
+      "year": 2025
+    }
+  }
+}

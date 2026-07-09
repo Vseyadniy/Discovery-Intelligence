@@ -1,0 +1,140 @@
+# schema.yaml — the data schema each entity is filled against.
+# Edit this per project. The orchestrator injects `fields` into every collector
+# prompt and asks each collector to return one claim per field (or null).
+#
+# type is advisory (helps the model format the value); `estimate: true` fields
+# MUST carry an `assumptions` string when the value is derived rather than sourced.
+
+project_id: "discovery-ru-infra-2026-07"     # unique per delivery engagement
+geo: "ru_cis"                                # ru_cis | global
+mode: "industry_specific"                    # industry_specific | industry_agnostic
+industry: "it_saas"                          # key into source_registry.yaml (RU IT-infra: IaaS/PaaS/Security)
+
+# Language of free-text field VALUES (description, latest_news, segment label, notes).
+# Set to the language of the market being researched. Proper names — brand, legal
+# entity, and product names — are ALWAYS kept verbatim in their original form and
+# are never translated or transliterated. For RU/CIS markets use Russian.
+output_language: "Russian"                   # e.g. "Russian" | "English"
+
+fields:
+  # ── disambiguation block (required) ───────────────────────────────────────
+  - name: brand_name
+    type: string
+    desc: "Market-facing name buyers recognize."
+  - name: legal_entity_name
+    type: string
+    desc: "Registered legal name (e.g. ООО …). Pull from the registry, not press."
+  - name: inn
+    type: string
+    desc: "RU/CIS taxpayer number (ИНН). Primary disambiguation key for RU."
+  - name: website
+    type: string
+    desc: "Primary corporate domain."
+  - name: entity_type
+    type: enum[product,brand,company,group,foreign_entity]
+    desc: "Scope of fit to the research goal: product = ONE specific product fits; brand = a set of products under one brand fits; company = almost all of the company's products fit; group = products across multiple companies of a holding fit; foreign_entity = has revenue in Russia but the entity is foreign."
+  - name: confidence_entity_match
+    type: enum[high,medium,low]
+    desc: "How sure the collector is that all fields describe the SAME real entity."
+
+  # ── business fields ───────────────────────────────────────────────────────
+  - name: description
+    type: string
+    desc: "A structured profile following THIS sequence (skip an element if not found — never invent): «Name — founded [year] by [founders] (as [original company], if there was a pivot). Who they are + their mission + what problem they solve + for whom + how they make money + which product is the main cash cow + why they win + where they are vulnerable + why the company matters for THIS research.» Write as flowing prose, not a bullet list."
+  - name: business_model
+    type: string
+    desc: "How the company makes money: model (SaaS-подписка, транзакционная комиссия, лицензии, freemium, услуги/консалтинг…), pricing tiers if public, share of recurring revenue if known."
+  - name: target_customers
+    type: string
+    desc: "Who buys: customer segments, buyer roles, company size (SMB / mid / enterprise / госсектор), industries. Name flagship clients if published."
+  - name: positioning
+    type: string
+    desc: "How it positions vs competitors: category claim, key differentiators (data, tech, price, coverage), price tier, and who it is typically compared with."
+  - name: segment
+    type: string
+    desc: "EXACTLY one of the short segment labels agreed at discovery (companies.json → segments). ≤ 3 words, e.g. «Проверка контрагентов», «Тендерная аналитика». Never a descriptive sentence."
+  # ── financials, 2022–2025 history (RU: rusprofile.ru / list-org.com company
+  #     cards publish the multi-year revenue history; tadviser.ru for ratings).
+  #     MONEY FORMAT (all revenue/EBITDA/projection fields): «N млн ₽» — millions
+  #     of rubles, space thousands separator, comma decimals, "~" prefix for
+  #     estimates. E.g. «737,7 млн ₽», «48 300 млн ₽», «~1 250 млн ₽». ───────────
+  - name: product_revenue_2022
+    type: string
+    estimate: true
+    desc: "2022 revenue of the RESEARCHED SEGMENT only, «N млн ₽». Estimate the segment share of total if needed; basis in assumptions."
+  - name: product_revenue_2023
+    type: string
+    estimate: true
+    desc: "2023 segment revenue, «N млн ₽»."
+  - name: product_revenue_2024
+    type: string
+    estimate: true
+    desc: "2024 segment revenue, «N млн ₽»."
+  - name: product_revenue_2025
+    type: string
+    estimate: true
+    desc: "2025 segment revenue, «N млн ₽»."
+  - name: total_revenue_2022
+    type: string
+    estimate: true
+    desc: "2022 total company revenue, «N млн ₽» — from the rusprofile/list-org card's revenue history."
+  - name: total_revenue_2023
+    type: string
+    estimate: true
+    desc: "2023 total company revenue, «N млн ₽»."
+  - name: total_revenue_2024
+    type: string
+    estimate: true
+    desc: "2024 total company revenue, «N млн ₽»."
+  - name: total_revenue_2025
+    type: string
+    estimate: true
+    desc: "2025 total company revenue, «N млн ₽». Prefer a filed/registry figure; rusprofile.ru / list-org.com / tadviser.ru are acceptable — set confidence accordingly."
+  - name: ebitda_2022
+    type: string
+    estimate: true
+    desc: "2022 EBITDA, «N млн ₽» (may be negative, e.g. «-120 млн ₽»). Only if published (statements/press); otherwise blank + review_flag."
+  - name: ebitda_2023
+    type: string
+    estimate: true
+    desc: "2023 EBITDA, «N млн ₽», if published."
+  - name: ebitda_2024
+    type: string
+    estimate: true
+    desc: "2024 EBITDA, «N млн ₽», if published."
+  - name: ebitda_2025
+    type: string
+    estimate: true
+    desc: "2025 EBITDA, «N млн ₽», if published."
+  - name: revenue_yoy_24_25
+    type: string
+    estimate: true
+    desc: "TOTAL revenue growth 2024→2025 as a percentage: «+19,6%» / «-20,8%», «~» prefix for estimates. Compute from the two total-revenue figures; note which in assumptions."
+  - name: product_rev_yoy_24_25
+    type: string
+    estimate: true
+    desc: "PRODUCT-line revenue growth 2024→2025 as a percentage, computed from product_revenue_2024/2025; «~» prefix for estimates."
+  - name: ebitda_yoy_24_25
+    type: string
+    estimate: true
+    desc: "EBITDA growth 2024→2025 as a percentage, computed from ebitda_2024/2025 when both are published; otherwise blank."
+  - name: revenue_2026_projection
+    type: string
+    estimate: true
+    desc: "Projected 2026 total revenue, «N млн ₽». Stated company/analyst guidance if any; otherwise extrapolate from YoY and say so in assumptions."
+  - name: product_revenue_source
+    type: string
+    desc: "Where the PRODUCT-line revenue figures come from: the rating/registry/press URL + a one-line method (e.g. «smart-ranking.ru рейтинг 2025; доля сегмента ~60% по структуре продуктов»)."
+  - name: headcount
+    type: string
+    estimate: true
+    desc: "Employee count as a bare number/range, optional «+»: «26», «70+», «12 000». No words like «человек»/«сотрудников»."
+  - name: key_products
+    type: string
+    desc: "REQUIRED. ONLY the products relevant to the RESEARCHED market (their real names, not a category). 1–4 names. Everything else the company sells goes to other_products."
+  - name: other_products
+    type: string
+    desc: "The company's OTHER products outside the researched market (adjacent lines, modules, services) — a short list so key_products stays clean. Blank for pure-plays."
+  - name: latest_news
+    type: string
+    desc: "A SIGNIFICANT, DATED event with its source. Counts: acquisition/M&A, partnership, new product launch, new technology pilot, leadership change, major funding, a big incident or public controversy. Does NOT count: software-registry entries, certificates, ОКВЭД changes, offer/policy updates, webinars, blog overviews, listicle mentions. If nothing significant in ~24 months, leave blank + review_flag."

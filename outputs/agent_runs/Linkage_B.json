@@ -1,0 +1,31 @@
+{
+  "entity": "Linkage / WestLink",
+  "collector": "B",
+  "fields": {
+    "description": {
+      "value": "CNews describes Linkage's Digital Manager as AI software for interpreting industrial customers' big data and automating management processes.",
+      "source": "https://www.cnews.ru/news/line/2025-06-04_gk_vestlink_v_partnerstve",
+      "snippet": "помогает интерпретировать Большие данные промышленных заказчиков для автоматизации управленческих процессов",
+      "confidence": "medium"
+    },
+    "segment": {
+      "value": "AI/ML / Industrial enterprise AI automation software",
+      "source": "https://www.cnews.ru/news/line/2025-06-04_gk_vestlink_v_partnerstve",
+      "snippet": "для промышленности на базе ИИ",
+      "confidence": "high"
+    },
+    "key_products": {
+      "value": "Digital Manager Linkage on Zyfra ZIIoT, using GigaChat for business to answer text/voice queries and surface KPIs, bottlenecks, defects and downtime.",
+      "source": "https://www.cnews.ru/news/line/2025-06-04_gk_vestlink_v_partnerstve",
+      "snippet": "С помощью текстовых и голосовых запросов ... Система выявляет узкие места, такие как брак, простои и недовыполнение плана",
+      "confidence": "medium"
+    },
+    "latest_news": {
+      "value": "2025-06-04: WestLink and Zyfra presented AI-based Digital Manager for industry on Zyfra's ZIIoT platform.",
+      "source": "https://www.cnews.ru/news/line/2025-06-04_gk_vestlink_v_partnerstve",
+      "snippet": "ГК «ВестЛинк» в партнерстве с ГК «Цифра» представила «Цифрового управленца» для промышленности на базе ИИ",
+      "confidence": "high",
+      "year": 2025
+    }
+  }
+}

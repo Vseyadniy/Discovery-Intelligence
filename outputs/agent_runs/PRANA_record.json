@@ -1,0 +1,60 @@
+{
+  "entity": "PRANA",
+  "entity_match": {
+    "entity_type": "product",
+    "confidence": "medium",
+    "note": "Product entity is clear; legal owner is ROTEC JSC, but no registry/INN source was opened."
+  },
+  "needs_review": true,
+  "fields": {
+    "brand_name": {
+      "value": "PRANA",
+      "confidence": "high",
+      "source": "https://prana-system.com/",
+      "snippet": "PRANA: Industry Standard of the Future"
+    },
+    "legal_entity_name": {
+      "value": "АО «РОТЕК»",
+      "confidence": "medium",
+      "source": "https://prana-system.com/",
+      "snippet": "developed by ROTEC JSC",
+      "assumptions": "Legal owner inferred from official PRANA site; confirm in registry."
+    },
+    "website": {
+      "value": "https://prana-system.com/",
+      "confidence": "high",
+      "source": "https://prana-system.com/",
+      "snippet": "Predictive Analytics and Remote Monitoring System"
+    },
+    "segment": {
+      "value": "AI/ML / Industrial enterprise AI automation software",
+      "confidence": "high",
+      "source": "https://prana-system.com/",
+      "snippet": "machine-learning technologies ... big data processing tools"
+    },
+    "description": {
+      "value": "Predictive analytics and remote monitoring IIoT system for industrial equipment diagnostics, using statistical analysis, machine-learning technologies and big-data processing.",
+      "confidence": "high",
+      "source": "https://prana-system.com/",
+      "snippet": "Industrial IoT solution for diagnostics and predictive analytics of industrial equipment"
+    },
+    "key_products": {
+      "value": "PRANA predictive analytics, remote monitoring, situational center, emergency notifications, residual resource forecast, analytics and reports.",
+      "confidence": "high",
+      "source": "https://prana-system.com/",
+      "snippet": "Emergency Notifications; Residual Resource Forecast; Analytics and reports"
+    },
+    "latest_news": {
+      "value": "Third-party page states PRANA switched to Yandex ClickHouse in 2021 and monitored more than 130 sophisticated industrial equipment units as of 2021.",
+      "confidence": "medium",
+      "source": "https://en.wikipedia.org/wiki/PRANA_%28system%29",
+      "snippet": "In 2021, PRANA switched over to Yandex ClickHouse ... monitored more than 130 pieces",
+      "year": 2021
+    }
+  },
+  "review_flags": [
+    "inn: blank; no live registry source opened",
+    "revenue: blank; no bo.nalog.ru or equivalent filed revenue source opened",
+    "headcount: blank; no opened source"
+  ]
+}

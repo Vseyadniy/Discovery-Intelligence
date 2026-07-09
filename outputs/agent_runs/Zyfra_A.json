@@ -1,0 +1,63 @@
+{
+  "entity": "Zyfra",
+  "collector": "A",
+  "fields": {
+    "brand_name": {
+      "value": "Zyfra / ГК «Цифра»",
+      "source": "https://www.zyfra.com/ru/",
+      "snippet": "Мы — группа компаний «Цифра»",
+      "confidence": "high"
+    },
+    "legal_entity_name": {
+      "value": "ООО «Цифра»",
+      "source": "https://www.zyfra.com/ru/",
+      "snippet": "© 2026 Все права защищены. ООО «Цифра».",
+      "confidence": "medium",
+      "assumptions": "Official site footer confirms legal-name style, but no registry page was opened in this run."
+    },
+    "website": {
+      "value": "https://www.zyfra.com/ru/",
+      "source": "https://www.zyfra.com/ru/",
+      "snippet": "info@zyfra.com",
+      "confidence": "high"
+    },
+    "entity_type": {
+      "value": "group",
+      "source": "https://www.zyfra.com/ru/",
+      "snippet": "Цифра — российский разработчик решений для цифровизации промышленности",
+      "confidence": "high"
+    },
+    "confidence_entity_match": {
+      "value": "medium",
+      "source": "https://www.zyfra.com/ru/",
+      "snippet": "ООО «Цифра»",
+      "confidence": "medium",
+      "assumptions": "INN was not confirmed from registry/filing source."
+    },
+    "description": {
+      "value": "Russian industrial software group building digital products for heavy-industry production management.",
+      "source": "https://www.zyfra.com/ru/",
+      "snippet": "Создаём цифровые продукты для управления тяжёлой промышленностью.",
+      "confidence": "high"
+    },
+    "segment": {
+      "value": "AI/ML / Industrial enterprise AI automation software",
+      "source": "https://www.zyfra.com/ru/",
+      "snippet": "развиваем ... прикладного применения искусственного интеллекта",
+      "confidence": "medium"
+    },
+    "key_products": {
+      "value": "Zyfra Industrial IoT Platform, Конструктор MES, Диспетчер, карьерная роботизация, роботизированное бурение, Балансы, Лаборатория качества.",
+      "source": "https://www.zyfra.com/ru/",
+      "snippet": "Zyfra Industrial IoT Platform; Цифра. Конструктор MES; Цифра. Диспетчер; Цифра. Роботизация буровых станков",
+      "confidence": "high"
+    },
+    "latest_news": {
+      "value": "Upcoming July 2026 webinars on industrial MES, maintenance dispatcher and digital transformation are listed on the company site.",
+      "source": "https://www.zyfra.com/ru/",
+      "snippet": "Онлайн 14 Июля 2026 От зарубежного MES к российскому ПО; Онлайн 16 Июля 2026 Цифра. Диспетчер ТОиР",
+      "confidence": "medium",
+      "year": 2026
+    }
+  }
+}

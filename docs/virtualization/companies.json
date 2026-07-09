@@ -1,0 +1,60 @@
+{
+  "market": "Virtualization",
+  "coverage_note": "≈85–90% российского/ru_cis рынка коммерческих платформ виртуализации и VDI; 8 игроков. Непокрытый хвост — небольшие и нишевые продукты серверной виртуализации, VDI, HCI и частных облаков: HostVM, Базальт СПО, ИЦ «Баррикады», Иридиум, Нума, Ситроникс, Шаркс, Аэродиск и отраслевые/in-house облачные платформы.",
+  "segments": [
+    "Серверная виртуализация",
+    "Виртуальные рабочие места",
+    "Частные облака",
+    "Гиперконвергенция"
+  ],
+  "companies": [
+    {
+      "brand": "Базис",
+      "segment": "Серверная виртуализация",
+      "reason": "Крупнейший игрок: №1 CNews Analytics по выручке от платформ виртуализации 2024 и лидер по доле рынка в исследовании ТМТ Консалтинг.",
+      "source": "https://www.cnews.ru/reviews/rynok_platform_virtualizatsii/review_table/3f2a1a3b10c0a521005b41f9776c9e9f1fb7508e"
+    },
+    {
+      "brand": "Orion soft",
+      "segment": "Серверная виртуализация",
+      "reason": "Ключевой лидер серверной виртуализации: zVirt занимает 2-е место в рейтинге CNewsMarket 2025 и 2-е место по выручке CNews Analytics 2024.",
+      "source": "https://www.cnews.ru/reviews/rossijskie_platformy_virtualizatsii_1/review_table/225e7c52db929eb6ede049429ed9dac9ecd7a5c5"
+    },
+    {
+      "brand": "Группа Астра",
+      "segment": "Виртуальные рабочие места",
+      "reason": "Крупный поставщик VMmanager и Termidesk: №3 CNews Analytics по выручке от платформ виртуализации 2024 и топ-5 рынка по ТМТ Консалтинг.",
+      "source": "https://www.cnews.ru/reviews/rynok_platform_virtualizatsii/review_table/3f2a1a3b10c0a521005b41f9776c9e9f1fb7508e"
+    },
+    {
+      "brand": "Space",
+      "segment": "Частные облака",
+      "reason": "SpaceVM входит в тройку рейтинга CNewsMarket российских платформ виртуализации 2025 и в топ-4 CNews Analytics по выручке 2024.",
+      "source": "https://www.cnews.ru/reviews/rossijskie_platformy_virtualizatsii_1/articles/cnewsmarket_opublikoval_rejting_rossijskih_1"
+    },
+    {
+      "brand": "ITKey",
+      "segment": "Частные облака",
+      "reason": "Разработчик KeyStack/KeyVirt вошёл в топ-5 CNews Analytics крупнейших разработчиков платформ виртуализации по выручке 2024.",
+      "source": "https://www.cnews.ru/reviews/rynok_platform_virtualizatsii/review_table/3f2a1a3b10c0a521005b41f9776c9e9f1fb7508e"
+    },
+    {
+      "brand": "vStack",
+      "segment": "Гиперконвергенция",
+      "reason": "Платформа vStack HCP — крупный игрок HCI/виртуализации: №6 CNews Analytics по выручке 2024; ITGlobal.com также назван топ-5 игроком ТМТ Консалтинг.",
+      "source": "https://www.cnews.ru/reviews/rynok_platform_virtualizatsii/review_table/3f2a1a3b10c0a521005b41f9776c9e9f1fb7508e"
+    },
+    {
+      "brand": "РЕД СОФТ",
+      "segment": "Серверная виртуализация",
+      "reason": "РЕД Виртуализация входит в топ-10 рейтинга CNewsMarket 2025 и в топ-5 серверной виртуализации по исследованию ТМТ Консалтинг.",
+      "source": "https://www.rbc.ru/industries/news/66cd7a059a79479809bd3bd5"
+    },
+    {
+      "brand": "НТЦ ИТ РОСА",
+      "segment": "Серверная виртуализация",
+      "reason": "ROSA Virtualization входит в топ-10 CNewsMarket российских платформ виртуализации 2025 и в рейтинг CNews Analytics по выручке 2024.",
+      "source": "https://www.cnews.ru/reviews/rossijskie_platformy_virtualizatsii_1/review_table/225e7c52db929eb6ede049429ed9dac9ecd7a5c5"
+    }
+  ]
+}

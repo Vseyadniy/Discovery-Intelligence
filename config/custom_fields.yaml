@@ -1,0 +1,11 @@
+# custom_fields.yaml — extra research columns + description overrides
+# (managed by the app, tab «3 · Settings»). Merged into the schema at load
+# time: injected into every research prompt and the Excel deliverable.
+
+fields:
+- name: deployment_type_ratio
+  type: string
+  desc: 'Estimate product/segment revenue split: «oncloud N% / onprem N%». Use markers
+    from pricing, contracts, cases, procurement docs, ARR/subscription, license/maintenance
+    revenue, and cloud migration statements. Add short basis. If weak evidence, use
+    range. If no evidence, blank + review_flag.'

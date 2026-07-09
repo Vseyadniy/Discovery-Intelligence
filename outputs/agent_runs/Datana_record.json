@@ -1,0 +1,65 @@
+{
+  "entity": "Datana",
+  "entity_match": {
+    "entity_type": "legal_entity",
+    "confidence": "high",
+    "note": "Official site footer identifies ООО «Датана» and INN 9717079152."
+  },
+  "needs_review": true,
+  "fields": {
+    "brand_name": {
+      "value": "Datana",
+      "confidence": "high",
+      "source": "https://datana.ru/",
+      "snippet": "Datana — цифровизация производства, Индустрия 4.0, APC, СУУТП, компьютерное зрение"
+    },
+    "legal_entity_name": {
+      "value": "ООО «Датана»",
+      "confidence": "high",
+      "source": "https://datana.ru/",
+      "snippet": "ООО “Датана”"
+    },
+    "inn": {
+      "value": "9717079152",
+      "confidence": "high",
+      "source": "https://datana.ru/",
+      "snippet": "ИНН 9717079152"
+    },
+    "website": {
+      "value": "https://datana.ru/",
+      "confidence": "high",
+      "source": "https://datana.ru/",
+      "snippet": "info@datana.ru"
+    },
+    "segment": {
+      "value": "AI/ML / Industrial enterprise AI automation software",
+      "confidence": "high",
+      "source": "https://datana.ru/",
+      "snippet": "СУУТП и ML, математика; CV - аналитика; Роботизация"
+    },
+    "description": {
+      "value": "Industrial AI/automation vendor for mining, metallurgy, chemical/oil and energy use cases, including APC, CV analytics and robotization.",
+      "confidence": "high",
+      "source": "https://datana.ru/",
+      "snippet": "Мы автономизируем и роботизируем, цифровизируем и оптимизируем"
+    },
+    "key_products": {
+      "value": "Datana APC, Datana Shopfloor, Датана Поток, Датана Искра, Датана Арма, Датана КИТТ, Datana Sense.",
+      "confidence": "high",
+      "source": "https://datana.ru/produkty/datana-apc/index.html",
+      "snippet": "Программный комплекс, предназначенный для разработки и внедрения систем усовершенствованного управления технологическими процессами"
+    },
+    "latest_news": {
+      "value": "2025: Datana reports Nornickel recognition for APC on Vanyukov furnaces and industry awards for mining-equipment productivity.",
+      "confidence": "medium",
+      "source": "https://datana.ru/",
+      "snippet": "Благодарность от Норникеля, 2025 г. За внедрение СУУТП на печах Ванюкова",
+      "year": 2025
+    }
+  },
+  "review_flags": [
+    "revenue: blank; no bo.nalog.ru or equivalent filed revenue source opened",
+    "headcount: blank; no opened source",
+    "collector_b: no independent third-party source found/opened during this quick test"
+  ]
+}

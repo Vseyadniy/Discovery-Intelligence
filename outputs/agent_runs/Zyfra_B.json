@@ -1,0 +1,25 @@
+{
+  "entity": "Zyfra",
+  "collector": "B",
+  "fields": {
+    "description": {
+      "value": "Market coverage frames Zyfra as the industrial data platform partner for AI-driven production management automation.",
+      "source": "https://www.cnews.ru/news/line/2025-06-04_gk_vestlink_v_partnerstve",
+      "snippet": "Платформа ZIIoT обеспечивает надежный фундамент данных ... проактивно управлять производством на основе продвинутой аналитики",
+      "confidence": "medium"
+    },
+    "segment": {
+      "value": "AI/ML / Industrial enterprise AI automation software",
+      "source": "https://www.cnews.ru/news/line/2025-06-04_gk_vestlink_v_partnerstve",
+      "snippet": "инструментом для оптимизации производственных процессов и повышения общей эффективности работы предприятий",
+      "confidence": "medium"
+    },
+    "latest_news": {
+      "value": "On 2025-06-04 CNews reported that WestLink and Zyfra presented an AI-based Digital Manager for industry on Zyfra's ZIIoT platform.",
+      "source": "https://www.cnews.ru/news/line/2025-06-04_gk_vestlink_v_partnerstve",
+      "snippet": "04 Июн 2025 ... представила «Цифрового управленца» для промышленности на базе ИИ",
+      "confidence": "medium",
+      "year": 2025
+    }
+  }
+}

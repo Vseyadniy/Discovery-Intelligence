@@ -1,0 +1,50 @@
+# source_registry.yaml — where each collector should look.
+# The orchestrator selects sources by geo + collector group (+ industry when
+# mode is industry_specific) and injects them into the collector prompt.
+#
+# Group A = official / registry / financial / company-owned  (source_group 'A')
+# Group B = news / market / third-party / reviews            (source_group 'B')
+#
+# tier hint: 1 = official/primary, 2 = reputable media/DB, 3 = blog/self-reported.
+
+ru_cis:
+  A:  # registry / financial / official
+    - { url: "bo.nalog.ru",      tier: 1, note: "ГИР БО — filed accounting statements. Authoritative revenue, BUT a JS SPA that often will not render for a browsing agent." }
+    - { url: "egrul.nalog.ru",   tier: 1, note: "ЕГРЮЛ — official registry (INN, legal name). Also a JS SPA; may time out." }
+    - { url: "rusprofile.ru",    tier: 2, note: "PRACTICAL PRIMARY for INN + revenue + headcount — renders reliably. Use when bo.nalog/egrul do not." }
+    - { url: "list-org.com",     tier: 2, note: "Company directory: INN, legal name, revenue, headcount. Renders well." }
+    - { url: "tadviser.ru",      tier: 2, note: "Company cards with revenue & rankings for RU IT/software vendors. Good revenue fallback." }
+    - { url: "navigator.sk.ru",  tier: 2, note: "Skolkovo residents registry — INN, revenue, product info for member companies." }
+    - { url: "<company>.ru",     tier: 2, note: "The company's own site (about / products / press)." }
+  B:  # news / market / third-party
+    - { url: "rbc.ru",           tier: 2 }
+    - { url: "vedomosti.ru",     tier: 2 }
+    - { url: "kommersant.ru",    tier: 2 }
+    - { url: "vc.ru",            tier: 3 }
+    - { url: "habr.com",         tier: 3 }
+
+global:
+  A:  # registry / official
+    - { url: "opencorporates.com", tier: 1 }
+    - { url: "sec.gov",            tier: 1, note: "EDGAR — filings for US public cos." }
+    - { url: "find-and-update.company-information.service.gov.uk", tier: 1, note: "UK Companies House." }
+    - { url: "<company>.com",      tier: 2, note: "Company's own site." }
+  B:  # news / market / reviews
+    - { url: "crunchbase.com",     tier: 2 }
+    - { url: "linkedin.com",       tier: 2 }
+    - { url: "g2.com",             tier: 3 }
+    - { url: "news.google.com",    tier: 3 }
+
+# Industry overlays — appended to the geo sources when mode = industry_specific.
+industries:
+  it_saas:
+    ru_cis: [ "tadviser.ru", "cnews.ru", "runet-id.com" ]
+    global: [ "g2.com", "capterra.com", "producthunt.com" ]
+  fintech:
+    ru_cis: [ "cbr.ru", "banki.ru", "frankmedia.ru" ]
+    global: [ "sec.gov", "finextra.com" ]
+  edtech:
+    # edtechs.ru & smart-ranking.ru publish RU EdTech company REVENUE ratings — the
+    # practical primary for segment revenue. dtf/vc for launches & funding news.
+    ru_cis: [ "edtechs.ru", "smart-ranking.ru", "vc.ru", "rb.ru" ]
+    global: [ "holoniq.com", "g2.com" ]

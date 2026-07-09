@@ -1,0 +1,62 @@
+{
+  "entity": "PRANA",
+  "collector": "A",
+  "fields": {
+    "brand_name": {
+      "value": "PRANA",
+      "source": "https://prana-system.com/",
+      "snippet": "PRANA: Industry Standard of the Future",
+      "confidence": "high"
+    },
+    "legal_entity_name": {
+      "value": "АО «РОТЕК»",
+      "source": "https://prana-system.com/",
+      "snippet": "PRANA ... developed by ROTEC JSC",
+      "confidence": "medium",
+      "assumptions": "Legal owner inferred from official PRANA site; registry source not opened."
+    },
+    "website": {
+      "value": "https://prana-system.com/",
+      "source": "https://prana-system.com/",
+      "snippet": "Predictive Analytics and Remote Monitoring System",
+      "confidence": "high"
+    },
+    "entity_type": {
+      "value": "product",
+      "source": "https://prana-system.com/",
+      "snippet": "PRANA (Predictive Analytics) – Predictive Analytics and Remote Monitoring System",
+      "confidence": "high"
+    },
+    "confidence_entity_match": {
+      "value": "medium",
+      "source": "https://prana-system.com/",
+      "snippet": "developed by ROTEC JSC",
+      "confidence": "medium",
+      "assumptions": "Product is anchored to ROTEC, but INN/revenue require registry check."
+    },
+    "description": {
+      "value": "Predictive analytics and remote monitoring IIoT system for industrial equipment diagnostics.",
+      "source": "https://prana-system.com/",
+      "snippet": "Industrial IoT solution for diagnostics and predictive analytics of industrial equipment",
+      "confidence": "high"
+    },
+    "segment": {
+      "value": "AI/ML / Industrial enterprise AI automation software",
+      "source": "https://prana-system.com/",
+      "snippet": "machine-learning technologies ... big data processing tools",
+      "confidence": "high"
+    },
+    "key_products": {
+      "value": "PRANA predictive analytics, remote monitoring, situational center, emergency notifications, residual resource forecast, analytics and reports.",
+      "source": "https://prana-system.com/",
+      "snippet": "System Architecture; Mathematical Tools; Emergency Notifications; Residual Resource Forecast",
+      "confidence": "high"
+    },
+    "latest_news": {
+      "value": "Official site presents PRANA as processing 6 TB of data and monitoring connected equipment value above $4B.",
+      "source": "https://prana-system.com/",
+      "snippet": "6 TB Of data processed ... > 4 B $ Connected equipment value",
+      "confidence": "medium"
+    }
+  }
+}

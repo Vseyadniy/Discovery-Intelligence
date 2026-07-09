@@ -1,0 +1,67 @@
+{
+  "entity": "Linkage / WestLink",
+  "entity_match": {
+    "entity_type": "product",
+    "confidence": "medium",
+    "note": "Product Linkage is clearly associated with WestLink; official page gives INN 9705074872, but exact legal form needs registry confirmation."
+  },
+  "needs_review": true,
+  "fields": {
+    "brand_name": {
+      "value": "Linkage / Цифровой управленец Linkage",
+      "confidence": "high",
+      "source": "https://westlink.group/",
+      "snippet": "Цифровой управленец Linkage"
+    },
+    "legal_entity_name": {
+      "value": "Группа компаний «ВестЛинк»",
+      "confidence": "medium",
+      "source": "https://westlink.group/",
+      "snippet": "Группа компаний «ВестЛинк»",
+      "assumptions": "Official site presents group name; exact legal form should be checked in registry."
+    },
+    "inn": {
+      "value": "9705074872",
+      "confidence": "medium",
+      "source": "https://westlink.group/",
+      "snippet": "9705074872 ИНН",
+      "assumptions": "Official site footer, not registry."
+    },
+    "website": {
+      "value": "https://westlink.group/",
+      "confidence": "high",
+      "source": "https://westlink.group/",
+      "snippet": "office@westlink-group.com"
+    },
+    "segment": {
+      "value": "AI/ML / Industrial enterprise AI automation software",
+      "confidence": "high",
+      "source": "https://www.cnews.ru/news/line/2025-06-04_gk_vestlink_v_partnerstve",
+      "snippet": "для промышленности на базе ИИ"
+    },
+    "description": {
+      "value": "Enterprise AI/data-driven management ecosystem for business and industrial-process management automation, including BI, EPM and AI assistant workflows.",
+      "confidence": "high",
+      "source": "https://westlink.group/",
+      "snippet": "экосистема продуктов для комплексного управления предприятием на основе данных"
+    },
+    "key_products": {
+      "value": "Linkage ABI, Linkage EPM, Linkage Contact Center; Digital Manager Linkage on Zyfra ZIIoT with GigaChat for business.",
+      "confidence": "high",
+      "source": "https://www.cnews.ru/news/line/2025-06-04_gk_vestlink_v_partnerstve",
+      "snippet": "Цифровой управленец Linkage ... GigaChat для бизнеса на платформе ZIIoT"
+    },
+    "latest_news": {
+      "value": "2025-06-04: CNews reported that WestLink and Zyfra presented an AI-based Digital Manager for industry on Zyfra's ZIIoT platform.",
+      "confidence": "high",
+      "source": "https://www.cnews.ru/news/line/2025-06-04_gk_vestlink_v_partnerstve",
+      "snippet": "представила «Цифрового управленца» для промышленности на базе ИИ",
+      "year": 2025
+    }
+  },
+  "review_flags": [
+    "legal_entity_name: exact legal form needs registry confirmation",
+    "revenue: blank; no bo.nalog.ru or equivalent filed revenue source opened",
+    "headcount: blank; no opened source"
+  ]
+}

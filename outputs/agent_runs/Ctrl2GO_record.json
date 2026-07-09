@@ -1,0 +1,55 @@
+{
+  "entity": "Ctrl2GO",
+  "entity_match": {
+    "entity_type": "brand",
+    "confidence": "medium",
+    "note": "Official site confirms the Ctrl2GO brand and industrial data-analysis positioning, but the legal entity and INN were not confirmed from opened registry source."
+  },
+  "needs_review": true,
+  "fields": {
+    "brand_name": {
+      "value": "Ctrl2GO",
+      "confidence": "high",
+      "source": "https://www.ctrl2go.com/",
+      "snippet": "Ctrl2GO является одним из крупнейших поставщиков решений для анализа данных в России"
+    },
+    "website": {
+      "value": "https://www.ctrl2go.com/",
+      "confidence": "high",
+      "source": "https://www.ctrl2go.com/",
+      "snippet": "info@ctrl2go.com"
+    },
+    "segment": {
+      "value": "AI/ML / Industrial enterprise AI automation software",
+      "confidence": "high",
+      "source": "https://www.ctrl2go.com/",
+      "snippet": "Предиктивная аналитика; Прескриптивная аналитика"
+    },
+    "description": {
+      "value": "Russian data-analysis and industrial digital-product vendor focused on predictive and prescriptive analytics for industrial operations.",
+      "confidence": "high",
+      "source": "https://www.ctrl2go.com/",
+      "snippet": "специализируется на разработке и внедрении цифровых продуктов в промышленности"
+    },
+    "key_products": {
+      "value": "CLASS cloud platform, SmartMaintenance, digital product passport/formulary, RiskAgro, C2G Blockchain Platform.",
+      "confidence": "high",
+      "source": "https://www.ctrl2go.com/",
+      "snippet": "Облачная программная платформа CLASS; SmartMaintenance; Цифровой формуляр (паспорт) изделия"
+    },
+    "latest_news": {
+      "value": "2025-01/02: official media list shows ongoing CLASS/agro and Lokotech digital-product-passport project updates.",
+      "confidence": "medium",
+      "source": "https://www.ctrl2go.com/",
+      "snippet": "22 января 2025 ООО «ЛокоТех-Сервис» ... второй этап проекта «Цифровой формуляр»",
+      "year": 2025
+    }
+  },
+  "review_flags": [
+    "legal_entity_name: blank; no live registry source opened",
+    "inn: blank; no live registry source opened",
+    "revenue: blank; no bo.nalog.ru or equivalent filed revenue source opened",
+    "headcount: blank; no opened source",
+    "collector_b: no independent third-party source found/opened during this quick test"
+  ]
+}
