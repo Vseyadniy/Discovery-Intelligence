@@ -46,6 +46,8 @@ def _canon_mode(m: str) -> str:
         return "gpt"
     if m in ("grok", "xai", "x.ai"):
         return "grok"
+    if m in ("deepseek", "ds"):
+        return "deepseek"
     return m
 
 MODE = _canon_mode(os.environ.get("AGENT_MODE", "gpt"))  # "gpt" | "claude"
@@ -72,6 +74,12 @@ GROK_BASE_URL = os.environ.get("GROK_BASE_URL") or "https://api.x.ai/v1"
 GROK_MODEL    = os.environ.get("GROK_MODEL") or "grok-4.20-0309-reasoning"
 GROK_API_KEY  = os.environ.get("GROK_API_KEY", "")
 
+# ── DeepSeek engine (OpenAI-compatible; NO server-side web search — suitable
+#     for the verifier and the qualitative track, not for browsing collectors) ─
+DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL") or "https://api.deepseek.com"
+DEEPSEEK_MODEL    = os.environ.get("DEEPSEEK_MODEL") or "deepseek-chat"
+DEEPSEEK_API_KEY  = os.environ.get("DEEPSEEK_API_KEY", "")
+
 # ── Claude engine ─────────────────────────────────────────────────────────────
 CLAUDE_MODEL     = os.environ.get("CLAUDE_MODEL", "claude-opus-4-8")       # claude mode: collectors + verify
 ESCALATION_MODEL = os.environ.get("ESCALATION_MODEL", "claude-opus-4-8")   # gpt mode: verifier escalation target
@@ -80,6 +88,7 @@ USE_WEB_SEARCH   = os.environ.get("USE_WEB_SEARCH", "1").lower() not in ("0", "f
 _cheap_client = None
 _claude_client = None
 _grok_client = None
+_deepseek_client = None
 
 
 def _cheap():
@@ -109,6 +118,15 @@ def _grok():
         _grok_client = OpenAI(base_url=GROK_BASE_URL, api_key=GROK_API_KEY,
                               timeout=1800.0, max_retries=1)
     return _grok_client
+
+
+def _deepseek():
+    global _deepseek_client
+    if _deepseek_client is None:
+        from openai import OpenAI
+        _deepseek_client = OpenAI(base_url=DEEPSEEK_BASE_URL, api_key=DEEPSEEK_API_KEY,
+                                  timeout=1800.0, max_retries=1)
+    return _deepseek_client
 
 
 def _thinks(model: str) -> bool:
@@ -172,6 +190,27 @@ def _run_grok(system: str, user: str, web: bool = False, max_tokens: int = 16000
     return _run_responses(_grok(), GROK_MODEL, system, user, web, max_tokens, on_event)
 
 
+def _run_deepseek(system: str, user: str, max_tokens: int = 16000, on_event=None) -> str:
+    # DeepSeek via Chat Completions (streamed). No web tool exists on this API —
+    # callers must only use it for non-browsing work (verify / qual design).
+    ev = on_event or (lambda a, d: None)
+    kwargs = dict(
+        model=DEEPSEEK_MODEL, max_tokens=max_tokens, stream=True,
+        messages=[{"role": "system", "content": system},
+                  {"role": "user", "content": user}],
+    )
+    parts = []
+    for chunk in _deepseek().chat.completions.create(**kwargs):
+        if chunk.choices and chunk.choices[0].delta and chunk.choices[0].delta.content:
+            if not parts:
+                ev("writing", "")
+            parts.append(chunk.choices[0].delta.content)
+    text = "".join(parts)
+    if not text.strip():
+        raise RuntimeError(f"{DEEPSEEK_MODEL} returned no text — retry the step")
+    return text
+
+
 def _run_claude(model: str, system: str, user: str, max_tokens: int = 16000,
                 web: bool = False, on_event=None) -> str:
     client = _claude()
@@ -222,6 +261,12 @@ def collect(system: str, user: str, max_tokens: int = 16000, on_event=None):
     if MODE == "grok":
         return _run_grok(system, user, web=True, max_tokens=max_tokens,
                          on_event=on_event), GROK_MODEL
+    if MODE == "deepseek":
+        raise RuntimeError(
+            "DeepSeek has no server-side web search, and research collectors must "
+            "browse live sources. Pick ChatGPT / Claude / Grok for quantitative "
+            "research steps — DeepSeek works for the qualitative track (tab 2), "
+            "where no browsing is needed.")
     return _run_cheap(system, user, web=True, max_tokens=max_tokens,
                       on_event=on_event), CHEAP_MODEL
 
@@ -237,6 +282,8 @@ def verify(system: str, user: str, escalate: bool, max_tokens: int = 12000, on_e
     if MODE == "grok":
         return _run_grok(system, user, web=False, max_tokens=max_tokens,
                          on_event=on_event), GROK_MODEL
+    if MODE == "deepseek":
+        return _run_deepseek(system, user, max_tokens, on_event), DEEPSEEK_MODEL
     return _run_cheap(system, user, web=False, max_tokens=max_tokens,
                       on_event=on_event), CHEAP_MODEL
 
@@ -246,8 +293,11 @@ def banner() -> str:
         web = "web_search on" if USE_WEB_SEARCH else "no web"
         return f"mode=claude  collectors/verify={CLAUDE_MODEL} ({web})  escalate={ESCALATION_MODEL}"
     if MODE == "grok":
-        web = "live_search on" if USE_WEB_SEARCH else "no web"
+        web = "web_search on" if USE_WEB_SEARCH else "no web"
         return f"mode=grok  research/verify={GROK_MODEL} (xAI, {web})  escalate={ESCALATION_MODEL}"
+    if MODE == "deepseek":
+        return (f"mode=deepseek  verify/qual={DEEPSEEK_MODEL} (DeepSeek, NO web — "
+                f"not for browsing collectors)")
     gpt_web = "web_search on" if (CHEAP_WEB_CAPABLE and USE_WEB_SEARCH) else "no browsing"
     return (f"mode=gpt  research/verify={CHEAP_MODEL} (OpenAI, {gpt_web})  "
             f"escalate={ESCALATION_MODEL}")

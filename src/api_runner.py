@@ -68,9 +68,12 @@ def apply_env(values: dict[str, str]) -> None:
     mr.CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", mr.CLAUDE_MODEL)
     mr.GROK_API_KEY = os.environ.get("GROK_API_KEY", mr.GROK_API_KEY)
     mr.GROK_MODEL = os.environ.get("GROK_MODEL", mr.GROK_MODEL)
+    mr.DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", mr.DEEPSEEK_API_KEY)
+    mr.DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", mr.DEEPSEEK_MODEL)
     mr._cheap_client = None      # force re-construction with the new keys
     mr._claude_client = None
     mr._grok_client = None
+    mr._deepseek_client = None
 
 
 def _collector_prompt(letter: str, brand: str, hint: str, schema, registry, corrections) -> str:
@@ -313,7 +316,7 @@ def main() -> None:
     ap = argparse.ArgumentParser(description="Run the next research step via API.")
     ap.add_argument("run_id")
     ap.add_argument("--batch", type=int, default=3)
-    ap.add_argument("--provider", choices=("gpt", "claude", "grok"), default=None)
+    ap.add_argument("--provider", choices=("gpt", "claude", "grok", "deepseek"), default=None)
     ap.add_argument("--qual", action="store_true", help="drive the qualitative track")
     args = ap.parse_args()
     fn = run_next_qual_step if args.qual else run_next_step
