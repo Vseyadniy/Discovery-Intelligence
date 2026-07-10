@@ -77,6 +77,23 @@ _INSIGNIFICANT_NEWS = ("реестр", "оквэд", "оферт", "вебина
                        "опубликована новая редакция")
 
 _B_SIMILARITY = 0.85     # A/B text similarity at or above this = copied pass
+
+
+def _norm_name(s: str) -> str:
+    """Comparable product/brand name: lowercase, quotes/brackets/punctuation
+    stripped, whitespace collapsed."""
+    s = re.sub(r"[«»\"'()\[\].,;:!?]", " ", str(s).lower())
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def _is_brand_name(value: str, brand: str) -> bool:
+    """True when a key_products value is just the brand's own (official) name —
+    exact normalized match, or a short value (<40 chars) that contains the
+    brand (e.g. «Контур.Эльба (онлайн-бухгалтерия)»). Longer text and text
+    without the brand in it is NOT exempt: identical descriptive prose in
+    key_products still counts as a copied pass."""
+    v, b = _norm_name(value), _norm_name(brand)
+    return bool(b) and (v == b or (len(v) < 40 and b in v))
 _BATCH_WINDOW_S = 5      # record files written within this window = one batch
 _BATCH_MIN = 3
 
@@ -377,9 +394,17 @@ def validate_record(rec: dict, a: dict | None, b: dict | None,
             add("collector_B", "reject", "b-empty", "Collector B returned no values — a failed pass")
         elif a is not None:
             a_fields = a.get("fields") or {}
+            brand = str(rec.get("entity") or a.get("entity") or b.get("entity") or "")
             for name in ("description", "latest_news", "key_products"):
                 av, bv = value_of(a_fields.get(name)), value_of(b_fields.get(name))
-                if av and bv and SequenceMatcher(None, str(av), str(bv)).ratio() >= _B_SIMILARITY:
+                if not (av and bv):
+                    continue
+                # key_products of a single-product brand IS the brand's own
+                # name — both collectors reporting it honestly is not copying.
+                # Prose fields keep the strict check; short non-brand text too.
+                if name == "key_products" and _is_brand_name(str(av), brand):
+                    continue
+                if SequenceMatcher(None, str(av), str(bv)).ratio() >= _B_SIMILARITY:
                     add("collector_B", "reject", "b-copy",
                         f"B's {name} is a copy of A's text — B must research independently")
                     break

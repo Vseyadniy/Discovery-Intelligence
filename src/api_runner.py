@@ -105,6 +105,28 @@ def _save(path: Path, obj: dict) -> None:
     path.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+# Collector-B gate codes are derived from the _A/_B files, which a record
+# repair never touches — routing them into the record-repair prompt loops
+# forever. They get a fresh Collector B pass + verifier re-merge instead.
+_B_CODES = {"b-missing", "b-empty", "b-copy", "b-no-new-source"}
+_B_RERUN_LIMIT = 2   # same code still failing after this many fresh B passes → manual review
+
+
+def _b_reruns(run_dir: Path, brand: str, codes: set[str]) -> int:
+    """How many fresh Collector B passes this brand already got for any of
+    the currently-failing codes (from events.jsonl)."""
+    n = 0
+    try:
+        for line in (run_dir / "events.jsonl").read_text(encoding="utf-8").splitlines():
+            ev = json.loads(line)
+            if (ev.get("event") == "api_collector_b_rerun" and ev.get("brand") == brand
+                    and codes & set(str(ev.get("codes", "")).split(","))):
+                n += 1
+    except Exception:
+        pass
+    return n
+
+
 def _ground(obj: dict, log, label: str, only_fields=None) -> dict:
     """DeepSeek-only grounding audit: every `source` the model cited must be a
     URL its web tools actually saw this pass; ungrounded sources are stripped so
@@ -247,11 +269,45 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
     runs.salvage_records(run_dir)
     g = runs.run_gate(run_dir)
     if g["rejected"]:
-        fixed = []
+        fixed, manual = [], []
         for e in g["rejected"][:batch]:
             issues = [i for i in e["issues"] if i["severity"] == "reject"]
             a = gate._load(ar / f"{e['stem']}_A.json") or {}
             b = gate._load(ar / f"{e['stem']}_B.json") or {}
+
+            # Collector-B failures → fresh B pass + verifier re-merge (a record
+            # repair cannot clear them: the gate re-reads the _B.json file)
+            b_fail = {i["code"] for i in issues} & _B_CODES
+            if b_fail:
+                brand = e["entity"]
+                if _b_reruns(run_dir, brand, b_fail) >= _B_RERUN_LIMIT:
+                    msg = (f"{brand}: {'/'.join(sorted(b_fail))} survived "
+                           f"{_B_RERUN_LIMIT} fresh Collector B reruns — manual "
+                           f"review needed (inspect {e['stem']}_A/_B.json; no "
+                           f"more API calls will be spent on this check)")
+                    log(f"[api] STOP · {msg}")
+                    manual.append(msg)
+                    continue
+                log(f"[api] {brand}: {'/'.join(sorted(b_fail))} — rerunning "
+                    f"Collector B from scratch, then re-merging…")
+                b_raw, engine = mr.collect(
+                    _SYS, _collector_prompt("b", brand, "", schema, registry, corrections),
+                    16000, _ev(log, f"🟩 Collector B (rerun) · {brand}"))
+                b = mr.extract_json(b_raw)
+                grd = _ground(b, log, f"Collector B rerun · {brand}")
+                b.update(entity=brand, collector="B")
+                _save(ar / f"{e['stem']}_B.json", b)
+                v_raw, _ = mr.verify(_SYS, _verifier_prompt(a, b, schema, corrections),
+                                     escalate=False,
+                                     on_event=_ev(log, f"🟨 Verifier · {brand} — re-merging A+B"))
+                rec = mr.extract_json(v_raw)
+                rec["entity"] = brand
+                _save(e["path"], rec)
+                runs._event(run_dir, "api_collector_b_rerun", brand=brand,
+                            codes=",".join(sorted(b_fail)), engine=engine, **grd)
+                fixed.append(f"{brand} (B rerun)")
+                continue
+
             prompt = (
                 f"Repair ONE record for «{e['entity']}» (market: {meta['market']}).\n"
                 f"Failed checks:\n"
@@ -282,7 +338,10 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
                 runs._event(run_dir, "api_repair", brand=e["entity"],
                             engine=engine, **grd)
             fixed.append(e["entity"])
-        return f"repaired {len(fixed)}: {', '.join(fixed)} — re-gate via Next prompt"
+        summary = f"repaired {len(fixed)}: {', '.join(fixed) or '—'} — re-gate via Next prompt"
+        if manual:
+            summary += f" · MANUAL REVIEW: {'; '.join(manual)}"
+        return summary
 
     return f"all {len(g['accepted'])} records accepted — build the Excel"
 
