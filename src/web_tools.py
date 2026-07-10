@@ -143,12 +143,19 @@ class SourceLog:
                 if n:
                     self.fetched[n] = result["text"]
 
-    def check_grounding(self, record: dict) -> list[str]:
+    def check_grounding(self, record: dict, only_fields=None) -> list[str]:
         """Audit record['fields'][*]['source'] against the URLs actually seen:
           * exact match (domain+path)      → grounded, untouched
           * domain-only match              → source kept + review_flags note
           * no match                       → source stripped to "" (the existing
             gate then rejects the field as 'unsourced' → existing repair loop)
+        A source may hold several URLs (comma/space-joined by the verifier
+        merge) — each part is checked; one genuinely visited part grounds it.
+        `only_fields` restricts the audit — REQUIRED for repair passes, whose
+        instruction is "keep every other field exactly as-is": untouched fields
+        keep sources grounded in their ORIGINAL pass, which this pass's log
+        never saw, and stripping those would loop clean fields through repair
+        forever.
         review_flags notes carry the DOMAIN only — full URLs can contain year
         strings ("…/2024/…") that would trip the gate's history-missing
         suppression keywords. Full URLs go into the returned detail strings,
@@ -168,22 +175,27 @@ class SourceLog:
         domains = {n.split("/", 1)[0] for n in seen}
         details: list[str] = []
         for name, f in fields.items():
+            if only_fields is not None and name not in only_fields:
+                continue
             if not isinstance(f, dict):
                 continue
             src = f.get("source")
             if not src or not str(src).startswith(("http://", "https://")):
                 continue
-            n = _norm(src)
-            if n and n in seen:
+            parts = [p for p in re.split(r"[,;\s]+", str(src))
+                     if p.startswith(("http://", "https://"))]
+            norms = [n for n in (_norm(p) for p in parts) if n]
+            if any(n in seen for n in norms):
                 continue
-            dom = n.split("/", 1)[0] if n else ""
-            if dom and dom in domains:
+            dom_hits = sorted({n.split("/", 1)[0] for n in norms} & domains)
+            if dom_hits:
                 flags().append(f"{name}: source URL not opened this session "
-                               f"(domain seen: {dom})")
+                               f"(domain seen: {dom_hits[0]})")
                 details.append(f"{name}: flagged, page not opened ({src})")
             else:
+                doms = sorted({n.split("/", 1)[0] for n in norms})
                 f["source"] = ""
                 flags().append(f"{name}: ungrounded source removed"
-                               + (f" ({dom})" if dom else ""))
+                               + (f" ({', '.join(doms)})" if doms else ""))
                 details.append(f"{name}: ungrounded source removed ({src})")
         return details

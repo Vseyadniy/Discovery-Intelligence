@@ -105,7 +105,7 @@ def _save(path: Path, obj: dict) -> None:
     path.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def _ground(obj: dict, log, label: str) -> dict:
+def _ground(obj: dict, log, label: str, only_fields=None) -> dict:
     """DeepSeek-only grounding audit: every `source` the model cited must be a
     URL its web tools actually saw this pass; ungrounded sources are stripped so
     the EXISTING gate rejects the field as 'unsourced' → existing repair loop.
@@ -120,7 +120,7 @@ def _ground(obj: dict, log, label: str) -> dict:
     if mr.MODE != "deepseek" or mr.LAST_SOURCE_LOG is None:
         return {}
     slog = mr.LAST_SOURCE_LOG
-    details = slog.check_grounding(obj)
+    details = slog.check_grounding(obj, only_fields=only_fields)
     if details:
         log(f"[grounding] {label}: {len(details)} source(s) stripped/flagged")
         for d in details:
@@ -272,7 +272,10 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
             raw, engine = mr.collect(_SYS, prompt,
                                      on_event=_ev(log, f"🔧 Repair · {e['entity']}"))
             rec = mr.extract_json(raw)
-            grd = _ground(rec, log, f"Repair · {e['entity']}")
+            # repair audits ONLY the fields the model was asked to fix — the
+            # rest keep sources grounded in their original research pass
+            grd = _ground(rec, log, f"Repair · {e['entity']}",
+                          only_fields={i["field"] for i in issues})
             rec["entity"] = e["entity"]
             _save(e["path"], rec)
             if grd:   # deepseek only — other providers' events stay unchanged

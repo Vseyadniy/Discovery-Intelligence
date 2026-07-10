@@ -276,9 +276,13 @@ def _run_deepseek_tools(system: str, user: str, max_tokens: int = 16000,
     nudged = False
     while True:
         capped = calls >= _DS_MAX_TOOL_CALLS
-        resp = _deepseek().chat.completions.create(
-            model=DEEPSEEK_MODEL, max_tokens=max_tokens, messages=messages,
-            tools=_DS_TOOLS, tool_choice="none" if capped else "auto")
+        kwargs = dict(model=DEEPSEEK_MODEL, max_tokens=max_tokens,
+                      messages=messages)
+        if not capped:
+            kwargs.update(tools=_DS_TOOLS, tool_choice="auto")
+        # capped → no tools param at all: DeepSeek answers unreliably when
+        # tools are offered but tool_choice="none" forbids using them
+        resp = _deepseek().chat.completions.create(**kwargs)
         msg = resp.choices[0].message
         tool_calls = msg.tool_calls or []
         if tool_calls:
@@ -338,7 +342,8 @@ def _run_deepseek_tools(system: str, user: str, max_tokens: int = 16000,
             return text, log
         if not nudged:                             # one retry, then give up
             nudged = True
-            messages.append({"role": "assistant", "content": msg.content or ""})
+            messages.append({"role": "assistant",
+                             "content": msg.content or "(no output)"})
             messages.append({"role": "user", "content":
                 "Finish now: return the strict JSON using only sources already "
                 "consulted." if capped else
@@ -347,8 +352,10 @@ def _run_deepseek_tools(system: str, user: str, max_tokens: int = 16000,
             continue
         raise RuntimeError(
             f"{DEEPSEEK_MODEL} produced neither tool calls nor JSON after "
-            f"{calls} tool call(s) — retry, or pick ChatGPT / Claude / Grok "
-            f"for this step")
+            f"{calls} tool call(s) (finish_reason="
+            f"{getattr(resp.choices[0], 'finish_reason', '?')}, content head: "
+            f"{(msg.content or '')[:160]!r}) — retry, or pick ChatGPT / Claude "
+            f"/ Grok for this step")
 
 
 def _run_claude(model: str, system: str, user: str, max_tokens: int = 16000,

@@ -57,6 +57,26 @@ class TestCheckGrounding(unittest.TestCase):
                           "c": "plain string"}}
         self.assertEqual(self.log.check_grounding(rec), [])
 
+    def test_only_fields_scopes_repair_audit(self):
+        # repair passes must not strip sources from fields they weren't fixing
+        rec = _record(inn="https://untouched.example/card",
+                      revenue="https://also-ungrounded.example/x")
+        details = self.log.check_grounding(rec, only_fields={"revenue"})
+        self.assertEqual(len(details), 1)
+        self.assertEqual(rec["fields"]["inn"]["source"],
+                         "https://untouched.example/card")   # kept
+        self.assertEqual(rec["fields"]["revenue"]["source"], "")  # audited
+
+    def test_multi_url_source_grounded_by_any_part(self):
+        rec = _record(desc="https://site.ru/page, https://never-seen.example/x")
+        self.assertEqual(self.log.check_grounding(rec), [])   # one part visited
+        rec2 = _record(desc="https://never.example/a, https://never.example/b")
+        details = self.log.check_grounding(rec2)
+        self.assertEqual(len(details), 1)
+        self.assertEqual(rec2["fields"]["desc"]["source"], "")
+        self.assertEqual(rec2["review_flags"],
+                         ["desc: ungrounded source removed (never.example)"])
+
     def test_no_fields_dict_is_noop(self):
         self.assertEqual(self.log.check_grounding({"companies": [], "segments": []}), [])
         self.assertEqual(self.log.check_grounding({}), [])
