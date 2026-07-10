@@ -74,11 +74,25 @@ GROK_BASE_URL = os.environ.get("GROK_BASE_URL") or "https://api.x.ai/v1"
 GROK_MODEL    = os.environ.get("GROK_MODEL") or "grok-4.20-0309-reasoning"
 GROK_API_KEY  = os.environ.get("GROK_API_KEY", "")
 
-# ── DeepSeek engine (OpenAI-compatible; NO server-side web search — suitable
-#     for the verifier and the qualitative track, not for browsing collectors) ─
+# ── DeepSeek engine (OpenAI-compatible; NO server-side web search — research
+#     collectors run on the app's own web tools, see _run_deepseek_tools) ──────
 DEEPSEEK_BASE_URL = os.environ.get("DEEPSEEK_BASE_URL") or "https://api.deepseek.com"
 DEEPSEEK_MODEL    = os.environ.get("DEEPSEEK_MODEL") or "deepseek-chat"
 DEEPSEEK_API_KEY  = os.environ.get("DEEPSEEK_API_KEY", "")
+
+# ── app-side web tools (DeepSeek quantitative research) ──────────────────────
+# DeepSeek research collectors browse through the app's own web_search +
+# fetch_url tools (src/web_tools.py, client-side function calling) — a search
+# API key is required. web_tools reads these from the environment.
+SEARCH_API_KEY  = os.environ.get("SEARCH_API_KEY", "")
+SEARCH_PROVIDER = os.environ.get("SEARCH_PROVIDER") or "brave"
+
+# Source log of the most recent DeepSeek tools run, read by api_runner for the
+# grounding check. NOTE — v1 safety measure: this is shared module-global state,
+# so api_runner runs DeepSeek collectors A/B SEQUENTIALLY (see run_next_step).
+# TODO: when parallelizing DeepSeek collectors, return/pass the SourceLog
+# explicitly per collector instead of through this global.
+LAST_SOURCE_LOG = None
 
 # ── Claude engine ─────────────────────────────────────────────────────────────
 CLAUDE_MODEL     = os.environ.get("CLAUDE_MODEL", "claude-opus-4-8")       # claude mode: collectors + verify
@@ -211,6 +225,132 @@ def _run_deepseek(system: str, user: str, max_tokens: int = 16000, on_event=None
     return text
 
 
+# OpenAI function schemas for the app-side tools (DeepSeek research only)
+_DS_TOOLS = [
+    {"type": "function", "function": {
+        "name": "web_search",
+        "description": "Search the web. Returns a JSON list of "
+                       "{title, url, snippet} results.",
+        "parameters": {"type": "object", "properties": {
+            "query": {"type": "string", "description": "the search query"},
+            "count": {"type": "integer",
+                      "description": "max results to return (default 8)"}},
+            "required": ["query"]}}},
+    {"type": "function", "function": {
+        "name": "fetch_url",
+        "description": "Open a web page and return its visible text (truncated "
+                       "to ~10k chars). On failure returns {url, error} — try "
+                       "an alternative source instead of giving up.",
+        "parameters": {"type": "object", "properties": {
+            "url": {"type": "string", "description": "the http(s) URL to open"}},
+            "required": ["url"]}}},
+]
+
+# Appended to the system prompt for DeepSeek research runs ONLY — the shared
+# prompts/*.md files are never modified.
+_DS_TOOLS_ADDENDUM = (
+    "\n\nYou have no built-in browsing. Use the web_search and fetch_url tools "
+    "for every fact. Cite as `source` only URLs you actually fetched or saw in "
+    "search results this session. If a page fails to fetch, try an alternative "
+    "source rather than answering from memory.")
+
+_DS_MAX_TOOL_CALLS = 25   # hard cap, then the model is forced to answer
+_DS_KEEP_FETCHES = 8      # newest fetched pages kept verbatim in the ~64k context
+
+
+def _run_deepseek_tools(system: str, user: str, max_tokens: int = 16000,
+                        on_event=None):
+    """DeepSeek research pass: Chat Completions function-calling loop over the
+    app's web_search/fetch_url tools. Returns (text, SourceLog) — the log holds
+    every URL the model saw, for the grounding check in api_runner.
+    Each iteration is one short non-streaming call (the long-run streaming
+    concern doesn't apply: browsing happens between calls, in the app)."""
+    from .web_tools import SourceLog, fetch_url, require_search_key, web_search
+    require_search_key()   # fail fast — before any model tokens are spent
+    ev = on_event or (lambda a, d: None)
+    log = SourceLog()
+    messages = [{"role": "system", "content": system + _DS_TOOLS_ADDENDUM},
+                {"role": "user", "content": user}]
+    fetch_idxs: list[int] = []   # indices of fetch_url tool results, for trimming
+    calls = 0
+    nudged = False
+    while True:
+        capped = calls >= _DS_MAX_TOOL_CALLS
+        resp = _deepseek().chat.completions.create(
+            model=DEEPSEEK_MODEL, max_tokens=max_tokens, messages=messages,
+            tools=_DS_TOOLS, tool_choice="none" if capped else "auto")
+        msg = resp.choices[0].message
+        tool_calls = msg.tool_calls or []
+        if tool_calls:
+            messages.append({"role": "assistant", "content": msg.content or "",
+                             "tool_calls": [
+                                 {"id": t.id, "type": "function",
+                                  "function": {"name": t.function.name,
+                                               "arguments": t.function.arguments}}
+                                 for t in tool_calls]})
+            for t in tool_calls:
+                calls += 1
+                log.tool_calls = calls
+                try:
+                    args = json.loads(t.function.arguments or "{}")
+                except Exception:
+                    args = {}
+                name = t.function.name
+                if name == "web_search":
+                    q = str(args.get("query", ""))
+                    ev("searching", q)
+                    try:
+                        results = web_search(q, int(args.get("count") or 8))
+                        log.log_search(results)
+                        payload = json.dumps(results, ensure_ascii=False)
+                    except Exception as ex:
+                        payload = json.dumps(
+                            {"error": f"{type(ex).__name__}: {ex}"},
+                            ensure_ascii=False)
+                elif name == "fetch_url":
+                    u = str(args.get("url", ""))
+                    ev("reading", u)
+                    result = fetch_url(u)          # never raises: {url, error}
+                    log.log_fetch(u, result)
+                    fetch_idxs.append(len(messages))
+                    payload = json.dumps(result, ensure_ascii=False)
+                else:
+                    payload = json.dumps({"error": f"unknown tool «{name}»"})
+                messages.append({"role": "tool", "tool_call_id": t.id,
+                                 "content": payload})
+            # keep only the newest pages verbatim in the model's context —
+            # the SourceLog keeps everything for the grounding check regardless
+            while len(fetch_idxs) > _DS_KEEP_FETCHES:
+                i = fetch_idxs.pop(0)
+                try:
+                    dropped = json.loads(messages[i]["content"]).get("url", "")
+                except Exception:
+                    dropped = ""
+                messages[i]["content"] = f"[dropped from context: {dropped}]"
+            if calls >= _DS_MAX_TOOL_CALLS:
+                messages.append({"role": "user", "content":
+                    "Finish now: return the strict JSON using only sources "
+                    "already consulted."})
+            continue
+        text = (msg.content or "").strip()
+        if text and "{" in text:
+            ev("writing", "")
+            return text, log
+        if not nudged:                             # one retry, then give up
+            nudged = True
+            messages.append({"role": "assistant", "content": msg.content or ""})
+            messages.append({"role": "user", "content":
+                "Finish now: return the strict JSON using only sources already "
+                "consulted." if capped else
+                "You must research via the web_search and fetch_url tools, then "
+                "return the strict JSON object. Start with web_search now."})
+            continue
+        raise RuntimeError(
+            f"{DEEPSEEK_MODEL} produced neither tool calls nor JSON after "
+            f"{calls} tool call(s) — retry, or pick ChatGPT / Claude / Grok "
+            f"for this step")
+
+
 def _run_claude(model: str, system: str, user: str, max_tokens: int = 16000,
                 web: bool = False, on_event=None) -> str:
     client = _claude()
@@ -262,11 +402,13 @@ def collect(system: str, user: str, max_tokens: int = 16000, on_event=None):
         return _run_grok(system, user, web=True, max_tokens=max_tokens,
                          on_event=on_event), GROK_MODEL
     if MODE == "deepseek":
-        raise RuntimeError(
-            "DeepSeek has no server-side web search, and research collectors must "
-            "browse live sources. Pick ChatGPT / Claude / Grok for quantitative "
-            "research steps — DeepSeek works for the qualitative track (tab 2), "
-            "where no browsing is needed.")
+        # No server-side search on this API — research runs on the app's own
+        # web tools. v1: the SourceLog travels through the module global (see
+        # LAST_SOURCE_LOG note) — do not run two deepseek collects concurrently.
+        global LAST_SOURCE_LOG
+        text, log = _run_deepseek_tools(system, user, max_tokens, on_event)
+        LAST_SOURCE_LOG = log
+        return text, f"{DEEPSEEK_MODEL}+tools"
     return _run_cheap(system, user, web=True, max_tokens=max_tokens,
                       on_event=on_event), CHEAP_MODEL
 
@@ -296,8 +438,8 @@ def banner() -> str:
         web = "web_search on" if USE_WEB_SEARCH else "no web"
         return f"mode=grok  research/verify={GROK_MODEL} (xAI, {web})  escalate={ESCALATION_MODEL}"
     if MODE == "deepseek":
-        return (f"mode=deepseek  verify/qual={DEEPSEEK_MODEL} (DeepSeek, NO web — "
-                f"not for browsing collectors)")
+        return (f"mode=deepseek  research={DEEPSEEK_MODEL} (app web tools: "
+                f"search+fetch)  verify/qual={DEEPSEEK_MODEL}")
     gpt_web = "web_search on" if (CHEAP_WEB_CAPABLE and USE_WEB_SEARCH) else "no browsing"
     return (f"mode=gpt  research/verify={CHEAP_MODEL} (OpenAI, {gpt_web})  "
             f"escalate={ESCALATION_MODEL}")

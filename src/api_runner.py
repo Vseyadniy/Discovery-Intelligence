@@ -70,6 +70,8 @@ def apply_env(values: dict[str, str]) -> None:
     mr.GROK_MODEL = os.environ.get("GROK_MODEL", mr.GROK_MODEL)
     mr.DEEPSEEK_API_KEY = os.environ.get("DEEPSEEK_API_KEY", mr.DEEPSEEK_API_KEY)
     mr.DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", mr.DEEPSEEK_MODEL)
+    mr.SEARCH_API_KEY = os.environ.get("SEARCH_API_KEY", mr.SEARCH_API_KEY)
+    mr.SEARCH_PROVIDER = os.environ.get("SEARCH_PROVIDER") or mr.SEARCH_PROVIDER
     mr._cheap_client = None      # force re-construction with the new keys
     mr._claude_client = None
     mr._grok_client = None
@@ -103,6 +105,29 @@ def _save(path: Path, obj: dict) -> None:
     path.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _ground(obj: dict, log, label: str) -> dict:
+    """DeepSeek-only grounding audit: every `source` the model cited must be a
+    URL its web tools actually saw this pass; ungrounded sources are stripped so
+    the EXISTING gate rejects the field as 'unsourced' → existing repair loop.
+    No-op (empty dict) for the other providers, whose server-side search makes
+    fabricated URLs impossible by construction.
+    v1: reads the module-global mr.LAST_SOURCE_LOG — which is why deepseek
+    collectors run sequentially (see below). TODO: pass the SourceLog explicitly
+    per collector when parallelizing. Returns event kwargs (tool-call count +
+    stripped/flagged tally); full URLs go to log()/events only, never into
+    review_flags (year strings in URLs would interact with the gate's
+    history-missing suppression keywords)."""
+    if mr.MODE != "deepseek" or mr.LAST_SOURCE_LOG is None:
+        return {}
+    slog = mr.LAST_SOURCE_LOG
+    details = slog.check_grounding(obj)
+    if details:
+        log(f"[grounding] {label}: {len(details)} source(s) stripped/flagged")
+        for d in details:
+            log(f"[grounding]   {d}")
+    return {"tool_calls": slog.tool_calls, "grounding_affected": len(details)}
+
+
 def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
                   log=print) -> str:
     """Execute the run's current step via API. Returns a one-line summary."""
@@ -120,13 +145,14 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
         log(f"[api] discovery via {mr.banner()}")
         raw, engine = mr.collect(_SYS, prompt, on_event=_ev(log, "🗺 Discovery"))
         data = mr.extract_json(raw)
+        grd = _ground(data, log, "Discovery")   # no-op shape for discovery output
         if not (data.get("companies") and data.get("segments")):
             raise SystemExit("discovery response lacked companies/segments — retry or "
                              "fall back to the paste flow")
         (run_dir / "companies.json").write_text(
             json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         runs._event(run_dir, "api_discovery", engine=engine,
-                    companies=len(data["companies"]))
+                    companies=len(data["companies"]), **grd)
         return f"discovery ({engine}): {len(data['companies'])} companies, " \
                f"{len(data['segments'])} segments"
 
@@ -157,21 +183,44 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
             hint = str(seg_by_brand.get(brand, ""))[:200]
             t0 = time.time()
             try:
-                log(f"[api] {brand} ({n}/{len(todo)}): collectors A+B in parallel — "
-                    f"a research pass takes several minutes…")
-                with ThreadPoolExecutor(max_workers=2) as ex:
-                    fa = ex.submit(mr.collect, _SYS,
-                                   _collector_prompt("a", brand, hint, schema, registry, corrections),
-                                   16000, _ev(log, f"🟦 Collector A · {brand} ({n}/{len(todo)})"))
-                    fb = ex.submit(mr.collect, _SYS,
-                                   _collector_prompt("b", brand, hint, schema, registry, corrections),
-                                   16000, _ev(log, f"🟩 Collector B · {brand} ({n}/{len(todo)})"))
-                    a_raw, engine = fa.result()
-                    b_raw, _ = fb.result()
-                a = mr.extract_json(a_raw)
+                grd = {}
+                if mr.MODE == "deepseek":
+                    # v1 safety measure: DeepSeek research uses the app's web
+                    # tools, whose SourceLog travels through the module-global
+                    # mr.LAST_SOURCE_LOG — running A and B in parallel would
+                    # race on it and ground each record against the other's
+                    # browsing. So deepseek runs A then B SEQUENTIALLY, each
+                    # grounded right after its own pass. TODO: pass a SourceLog
+                    # explicitly per collector, then re-join the parallel path.
+                    log(f"[api] {brand} ({n}/{len(todo)}): collectors A, then B "
+                        f"(sequential on DeepSeek) — a research pass takes minutes…")
+                    a_raw, engine = mr.collect(
+                        _SYS, _collector_prompt("a", brand, hint, schema, registry, corrections),
+                        16000, _ev(log, f"🟦 Collector A · {brand} ({n}/{len(todo)})"))
+                    a = mr.extract_json(a_raw)
+                    ga = _ground(a, log, f"Collector A · {brand}")
+                    b_raw, _ = mr.collect(
+                        _SYS, _collector_prompt("b", brand, hint, schema, registry, corrections),
+                        16000, _ev(log, f"🟩 Collector B · {brand} ({n}/{len(todo)})"))
+                    b = mr.extract_json(b_raw)
+                    gb = _ground(b, log, f"Collector B · {brand}")
+                    grd = {k: ga.get(k, 0) + gb.get(k, 0) for k in {*ga, *gb}}
+                else:
+                    log(f"[api] {brand} ({n}/{len(todo)}): collectors A+B in parallel — "
+                        f"a research pass takes several minutes…")
+                    with ThreadPoolExecutor(max_workers=2) as ex:
+                        fa = ex.submit(mr.collect, _SYS,
+                                       _collector_prompt("a", brand, hint, schema, registry, corrections),
+                                       16000, _ev(log, f"🟦 Collector A · {brand} ({n}/{len(todo)})"))
+                        fb = ex.submit(mr.collect, _SYS,
+                                       _collector_prompt("b", brand, hint, schema, registry, corrections),
+                                       16000, _ev(log, f"🟩 Collector B · {brand} ({n}/{len(todo)})"))
+                        a_raw, engine = fa.result()
+                        b_raw, _ = fb.result()
+                    a = mr.extract_json(a_raw)
+                    b = mr.extract_json(b_raw)
                 a.update(entity=brand, collector="A")
                 _save(ar / f"{stem}_A.json", a)
-                b = mr.extract_json(b_raw)
                 b.update(entity=brand, collector="B")
                 _save(ar / f"{stem}_B.json", b)
                 log(f"[api] {brand}: collectors done in {int(time.time() - t0)}s; verifier…")
@@ -182,7 +231,7 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
                 rec["entity"] = brand
                 _save(ar / f"{stem}_record.json", rec)
                 runs._event(run_dir, "api_company", brand=brand, engine=engine,
-                            seconds=int(time.time() - t0))
+                            seconds=int(time.time() - t0), **grd)
                 done.append(brand)
             except Exception as ex_err:                      # keep the batch alive
                 failed.append(f"{brand} ({type(ex_err).__name__}: {str(ex_err)[:120]})")
@@ -223,8 +272,12 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
             raw, engine = mr.collect(_SYS, prompt,
                                      on_event=_ev(log, f"🔧 Repair · {e['entity']}"))
             rec = mr.extract_json(raw)
+            grd = _ground(rec, log, f"Repair · {e['entity']}")
             rec["entity"] = e["entity"]
             _save(e["path"], rec)
+            if grd:   # deepseek only — other providers' events stay unchanged
+                runs._event(run_dir, "api_repair", brand=e["entity"],
+                            engine=engine, **grd)
             fixed.append(e["entity"])
         return f"repaired {len(fixed)}: {', '.join(fixed)} — re-gate via Next prompt"
 

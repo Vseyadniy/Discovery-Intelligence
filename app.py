@@ -230,7 +230,7 @@ class App:
             f"ChatGPT — {os.environ.get('CHEAP_MODEL', 'gpt-5.5')} (OpenAI)": "gpt",
             f"Claude — {os.environ.get('CLAUDE_MODEL', 'claude-opus-4-8')} (Anthropic)": "claude",
             f"Grok — {os.environ.get('GROK_MODEL', 'grok-4.20-0309-reasoning')} (xAI)": "grok",
-            f"DeepSeek — {os.environ.get('DEEPSEEK_MODEL', 'deepseek-chat')} (no web · qual/verify)": "deepseek",
+            f"DeepSeek — {os.environ.get('DEEPSEEK_MODEL', 'deepseek-chat')} (app web tools · full)": "deepseek",
         }
 
     def _refresh_provider_labels(self):
@@ -699,20 +699,27 @@ class App:
         self.model_deepseek = tk.StringVar(value=os.environ.get("DEEPSEEK_MODEL", "deepseek-chat"))
         ttk.Entry(frm, textvariable=self.model_deepseek, width=16).grid(row=4, column=3, sticky="w", **pad)
 
-        ttk.Label(frm, text="Default ⚡ provider:").grid(row=5, column=0, sticky="w", **pad)
+        ttk.Label(frm, text="Search API key:").grid(row=5, column=0, sticky="w", **pad)
+        self.key_search = tk.StringVar(value=os.environ.get("SEARCH_API_KEY", ""))
+        ttk.Entry(frm, textvariable=self.key_search, width=42, show="•").grid(
+            row=5, column=1, sticky="w", **pad)
+        ttk.Label(frm, text="(Brave)").grid(row=5, column=2, sticky="w", **pad)
+
+        ttk.Label(frm, text="Default ⚡ provider:").grid(row=6, column=0, sticky="w", **pad)
         ttk.Combobox(frm, textvariable=self.provider, state="readonly",
                      values=["gpt", "claude", "grok", "deepseek"], width=10).grid(
-            row=5, column=1, sticky="w", **pad)
+            row=6, column=1, sticky="w", **pad)
         ttk.Button(frm, text="Save API keys", command=self.on_save_keys).grid(
-            row=5, column=3, sticky="e", **pad)
-        ttk.Label(frm, text="DeepSeek has no web search — use it for the qualitative track "
-                            "and verification; browsing research steps need ChatGPT/Claude/Grok.",
-                  foreground="#666").grid(row=6, column=0, columnspan=4, sticky="w", **pad)
+            row=6, column=3, sticky="e", **pad)
+        ttk.Label(frm, text="DeepSeek has no built-in web search — quantitative research on "
+                            "DeepSeek runs on the app's own search+fetch tools and needs a "
+                            "Search API key (free tier: api-dashboard.search.brave.com).",
+                  foreground="#666").grid(row=7, column=0, columnspan=4, sticky="w", **pad)
 
-        ttk.Separator(frm, orient="horizontal").grid(row=7, column=0, columnspan=4, sticky="we", pady=8)
+        ttk.Separator(frm, orient="horizontal").grid(row=8, column=0, columnspan=4, sticky="we", pady=8)
 
         lay = ttk.Frame(frm)
-        lay.grid(row=8, column=0, columnspan=4, sticky="w", **pad)
+        lay.grid(row=9, column=0, columnspan=4, sticky="w", **pad)
         ttk.Label(lay, text="Layout:", font=("", 12, "bold")).grid(row=0, column=0, padx=(0, 10))
         self.layout_mode = tk.StringVar(value="excel")
         ttk.Radiobutton(lay, text="Excel layout (quantitative research)", value="excel",
@@ -722,7 +729,7 @@ class App:
 
         # ── Excel layout editor ──────────────────────────────────────────────
         self.excel_frame = ttk.Frame(frm)
-        self.excel_frame.grid(row=9, column=0, columnspan=4, sticky="nsew", **pad)
+        self.excel_frame.grid(row=10, column=0, columnspan=4, sticky="nsew", **pad)
         cols = ("column", "origin", "description")
         self.schema_tree = ttk.Treeview(self.excel_frame, columns=cols, show="headings", height=11)
         for c, w in zip(cols, (200, 75, 480)):
@@ -755,7 +762,7 @@ class App:
 
         # ── One-pager layout editor ──────────────────────────────────────────
         self.onepager_frame = ttk.Frame(frm)
-        self.onepager_frame.grid(row=9, column=0, columnspan=4, sticky="nsew", **pad)
+        self.onepager_frame.grid(row=10, column=0, columnspan=4, sticky="nsew", **pad)
         bcols = ("block", "origin", "what to research")
         self.block_tree = ttk.Treeview(self.onepager_frame, columns=bcols, show="headings", height=11)
         for c, w in zip(bcols, (170, 75, 510)):
@@ -787,7 +794,7 @@ class App:
             row=2, column=0, columnspan=5, sticky="w")
 
         frm.columnconfigure(1, weight=1)
-        frm.rowconfigure(9, weight=1)
+        frm.rowconfigure(10, weight=1)
         self._schema_refresh()
         self._blocks_refresh()
         self._apply_layout()
@@ -975,6 +982,7 @@ class App:
             "GROK_MODEL": self.model_grok.get().strip() or "grok-4.20-0309-reasoning",
             "DEEPSEEK_API_KEY": self.key_deepseek.get().strip(),
             "DEEPSEEK_MODEL": self.model_deepseek.get().strip() or "deepseek-chat",
+            "SEARCH_API_KEY": self.key_search.get().strip(),
             "AGENT_MODE": self.provider.get(),
         }
         save_env({k: v for k, v in values.items() if v})

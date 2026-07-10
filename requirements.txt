@@ -3,3 +3,5 @@ openai>=1.66          # Responses API (web_search tool) for GPT-5.5 research col
 pyyaml>=6.0
 openpyxl>=3.1         # export the research table to .xlsx (Excel / Airtable-ready)
 python-docx>=1.1        # final qualitative report (.docx merge of one-pagers)
+requests>=2.31        # app-side fetch_url tool (DeepSeek quantitative research)
+beautifulsoup4>=4.12  # visible-text extraction for fetched pages
