@@ -281,25 +281,53 @@ def _run_deepseek_tools(system: str, user: str, max_tokens: int = 16000,
         if not capped:
             kwargs.update(tools=_DS_TOOLS, tool_choice="auto")
         # capped → no tools param at all: DeepSeek answers unreliably when
-        # tools are offered but tool_choice="none" forbids using them
-        resp = _deepseek().chat.completions.create(**kwargs)
-        msg = resp.choices[0].message
-        tool_calls = msg.tool_calls or []
+        # tools are offered but tool_choice="none" forbids using them.
+        # STREAMED like every other engine here: a non-streaming call sits
+        # silent for the whole generation (the final JSON can take minutes),
+        # freezing the app's status line and risking idle-connection stalls.
+        kwargs["stream"] = True
+        ev("thinking", "")   # liveness between tool batches: the status line
+        content_parts: list[str] = []   # must move even while the model decides
+        acc: dict[int, dict] = {}          # tool-call deltas keyed by index
+        finish = None
+        for chunk in _deepseek().chat.completions.create(**kwargs):
+            if not chunk.choices:
+                continue
+            ch = chunk.choices[0]
+            finish = ch.finish_reason or finish
+            d = ch.delta
+            if d is None:
+                continue
+            if d.content:
+                if not content_parts:
+                    ev("writing", "")
+                content_parts.append(d.content)
+            for tc in (d.tool_calls or []):
+                slot = acc.setdefault(tc.index, {"id": "", "name": "", "arguments": ""})
+                if tc.id:
+                    slot["id"] = tc.id
+                if tc.function is not None:
+                    if tc.function.name:
+                        slot["name"] = tc.function.name
+                    if tc.function.arguments:
+                        slot["arguments"] += tc.function.arguments
+        content = "".join(content_parts)
+        tool_calls = [acc[i] for i in sorted(acc)]
         if tool_calls:
-            messages.append({"role": "assistant", "content": msg.content or "",
+            messages.append({"role": "assistant", "content": content,
                              "tool_calls": [
-                                 {"id": t.id, "type": "function",
-                                  "function": {"name": t.function.name,
-                                               "arguments": t.function.arguments}}
+                                 {"id": t["id"], "type": "function",
+                                  "function": {"name": t["name"],
+                                               "arguments": t["arguments"]}}
                                  for t in tool_calls]})
             for t in tool_calls:
                 calls += 1
                 log.tool_calls = calls
                 try:
-                    args = json.loads(t.function.arguments or "{}")
+                    args = json.loads(t["arguments"] or "{}")
                 except Exception:
                     args = {}
-                name = t.function.name
+                name = t["name"]
                 if name == "web_search":
                     q = str(args.get("query", ""))
                     ev("searching", q)
@@ -320,7 +348,7 @@ def _run_deepseek_tools(system: str, user: str, max_tokens: int = 16000,
                     payload = json.dumps(result, ensure_ascii=False)
                 else:
                     payload = json.dumps({"error": f"unknown tool «{name}»"})
-                messages.append({"role": "tool", "tool_call_id": t.id,
+                messages.append({"role": "tool", "tool_call_id": t["id"],
                                  "content": payload})
             # keep only the newest pages verbatim in the model's context —
             # the SourceLog keeps everything for the grounding check regardless
@@ -336,14 +364,13 @@ def _run_deepseek_tools(system: str, user: str, max_tokens: int = 16000,
                     "Finish now: return the strict JSON using only sources "
                     "already consulted."})
             continue
-        text = (msg.content or "").strip()
+        text = content.strip()
         if text and "{" in text:
-            ev("writing", "")
             return text, log
         if not nudged:                             # one retry, then give up
             nudged = True
             messages.append({"role": "assistant",
-                             "content": msg.content or "(no output)"})
+                             "content": content or "(no output)"})
             messages.append({"role": "user", "content":
                 "Finish now: return the strict JSON using only sources already "
                 "consulted." if capped else
@@ -352,10 +379,9 @@ def _run_deepseek_tools(system: str, user: str, max_tokens: int = 16000,
             continue
         raise RuntimeError(
             f"{DEEPSEEK_MODEL} produced neither tool calls nor JSON after "
-            f"{calls} tool call(s) (finish_reason="
-            f"{getattr(resp.choices[0], 'finish_reason', '?')}, content head: "
-            f"{(msg.content or '')[:160]!r}) — retry, or pick ChatGPT / Claude "
-            f"/ Grok for this step")
+            f"{calls} tool call(s) (finish_reason={finish}, content head: "
+            f"{content[:160]!r}) — retry, or pick ChatGPT / Claude / Grok "
+            f"for this step")
 
 
 def _run_claude(model: str, system: str, user: str, max_tokens: int = 16000,

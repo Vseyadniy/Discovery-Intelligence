@@ -37,7 +37,7 @@ _SYS_QUAL = ("You are a qualitative research designer on a market-intelligence "
              "the material in the prompt. Return STRICT JSON only — no prose.")
 
 _ACTION_LABEL = {"searching": "🔎 searching", "reading": "📄 reading",
-                 "writing": "🧠 analyzing & writing"}
+                 "writing": "🧠 analyzing & writing", "thinking": "⏳ thinking"}
 
 
 def _ev(log, prefix: str):
