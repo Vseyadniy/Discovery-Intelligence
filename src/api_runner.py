@@ -108,7 +108,7 @@ def _save(path: Path, obj: dict) -> None:
 # Collector-B gate codes are derived from the _A/_B files, which a record
 # repair never touches — routing them into the record-repair prompt loops
 # forever. They get a fresh Collector B pass + verifier re-merge instead.
-_B_CODES = {"b-missing", "b-empty", "b-copy", "b-no-new-source"}
+_B_CODES = gate.B_CODES
 _B_RERUN_LIMIT = 2   # same code still failing after this many fresh B passes → manual review
 
 

@@ -21,6 +21,7 @@ Checks:
   meta-news        latest_news is a meta-comment, not a dated event
   required-empty   description / segment / key_products blank
   b-missing/b-empty/b-copy/b-no-new-source   Collector B pass fabricated or skipped
+  product-source-missing   product revenue filled but its method column is empty
   fake-conflict    (warn) conflict recorded where a == b
   bo-nalog-unopened(warn) bo.nalog.ru cited without a figure-bearing snippet
   blank-no-flag    (warn) registry field blank with no review_flag naming it
@@ -78,6 +79,15 @@ _INSIGNIFICANT_NEWS = ("реестр", "оквэд", "оферт", "вебина
 
 _B_SIMILARITY = 0.85     # A/B text similarity at or above this = copied pass
 
+# Codes derived from the _A/_B collector files — a record edit can never fix
+# them; both prompt mode and API mode route these to a fresh Collector B pass.
+B_CODES = frozenset({"b-missing", "b-empty", "b-copy", "b-no-new-source"})
+
+# Product-revenue figures whose method must be named in product_revenue_source
+_PRODUCT_REV_FIELDS = ("product_revenue_2022", "product_revenue_2023",
+                       "product_revenue_2024", "product_revenue_2025",
+                       "product_rev_yoy_24_25")
+
 
 def _norm_name(s: str) -> str:
     """Comparable product/brand name: lowercase, quotes/brackets/punctuation
@@ -113,8 +123,16 @@ def is_search_url(url) -> bool:
 
 
 def is_placeholder(v) -> bool:
+    """A stub standing in for data. Substring stubs («не раскрыва…», «нет
+    данных») only count when the value is short or carries no figure at all —
+    a long methodology note that SAYS the figure isn't published and then
+    explains the estimate («…не раскрывается отдельно; оценка ~2% по структуре
+    выручки…») is real content, not a placeholder."""
     s = str(v).strip().lower()
-    return s in PLACEHOLDERS_EXACT or any(p in s for p in PLACEHOLDERS)
+    if s in PLACEHOLDERS_EXACT:
+        return True
+    return ((len(s) <= 60 or not re.search(r"\d", s))
+            and any(p in s for p in PLACEHOLDERS))
 
 
 def is_insignificant_news(v) -> bool:
@@ -384,6 +402,15 @@ def validate_record(rec: dict, a: dict | None, b: dict | None,
             add(name, "warn", "blank-no-flag",
                 "blank with no review_flags entry naming the registry source that was opened")
 
+    # product-revenue figures without their method column: a reader cannot tell
+    # a filed number from a calculated estimate
+    prs = value_of(fields.get("product_revenue_source"))
+    if (prs is None or is_placeholder(prs)) and any(
+            value_of(fields.get(n)) is not None for n in _PRODUCT_REV_FIELDS):
+        add("product_revenue_source", "reject", "product-source-missing",
+            "product revenue figures are filled but product_revenue_source is empty — "
+            "state whether they come directly from a filing/rating or are estimated, and how")
+
     # Collector B independence (the most-faked part of past runs)
     if b is None:
         add("collector_B", "reject", "b-missing",
@@ -537,7 +564,48 @@ _HINTS = {
     "b-copy": "Redo the Collector B pass from scratch: fresh wording taken from third-party sources, not A's text.",
     "b-no-new-source": "Collector B must cite at least one source A did not use (press, ranking, analyst, industry portal).",
     "bad-json": "Re-save the file as strict JSON (no prose around it).",
+    "product-source-missing": "Fill product_revenue_source with the URL you used + one line on the method: "
+                              "either «напрямую из <отчётность/рейтинг>» or «оценка: <метод и допущения>». "
+                              "If the product-line figures cannot be traced to any source, blank them and "
+                              "add a review_flags note instead.",
 }
+
+
+def render_b_redo_prompt(market: str, lang: str, save_dir: str,
+                         rejected: list[dict]) -> str:
+    """Paste-back prompt for Collector-B failures (B_CODES): these are derived
+    from the _A/_B files, so a record edit can never clear them — the fix is a
+    fresh, genuinely independent Collector B pass + verifier re-merge."""
+    blocks = []
+    for e in rejected:
+        items = [f"- {i['reason']}\n  → {_HINTS.get(i['code'], '')}"
+                 for i in e["issues"]
+                 if i["severity"] == "reject" and i["code"] in B_CODES]
+        blocks.append(f"## {e['entity']}\n" + "\n".join(items)
+                      + f"\n- overwrite `{save_dir}/{e['stem']}_B.json`, then re-merge "
+                        f"into `{save_dir}/{e['stem']}_record.json`")
+    body = "\n\n".join(blocks)
+    return f"""# Redo Collector B — {market}
+
+The records below failed the Collector-B INDEPENDENCE checks. Editing the record
+cannot fix this: the gate re-reads each company's `_A.json`/`_B.json` files. For
+EACH company below, do a genuinely fresh Collector B pass:
+
+1. Research the company from scratch in this chat — do NOT open or reuse the
+   `_A.json` text. Fresh wording throughout; ≥2 third-party sources (press,
+   industry portal, ranking, analyst), at least one that `_A.json` does not cite.
+2. Overwrite the company's `_B.json` with the full collector JSON
+   (`"collector": "B"`, `"entity"` = the exact brand, fields with value/source).
+3. Re-merge A+B into the `_record.json` per the verifier rules: union of all
+   fields, better-sourced value wins, disagreements recorded as conflicts +
+   `review_flags`. Keep every existing record field that the merge does not
+   improve. Prose in {lang}.
+
+{body}
+
+Then re-run the gate (Next prompt ▶ in the app) — remaining record-level issues
+get their own repair pass afterwards.
+"""
 
 
 def render_repair_prompt(market: str, lang: str, save_dir: str, rejected: list[dict],

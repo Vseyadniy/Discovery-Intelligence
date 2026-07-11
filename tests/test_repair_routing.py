@@ -106,5 +106,60 @@ class TestRepairRouting(unittest.TestCase):
         self.assertEqual(calls["collect"], ["B-PROMPT"])       # b-copy gets its own reruns
 
 
+class TestPromptModeRouting(unittest.TestCase):
+    """runs.next_prompt must issue a «Redo Collector B» prompt for B_CODES
+    rejects and the normal repair prompt for record-level rejects."""
+
+    _PROSE = ("Тест — облачная платформа для автоматизации бухгалтерии малого "
+              "бизнеса, запущена в 2015 году; тарифы от 2 000 ₽ в месяц, "
+              "интеграции с банками и ФНС, свыше 50 000 клиентов.")
+
+    def _make_run(self, b_prose):
+        import json
+        self.tmp = tempfile.TemporaryDirectory()
+        rd = Path(self.tmp.name)
+        (rd / "agent_runs").mkdir(parents=True)
+        (rd / "run.json").write_text(json.dumps({
+            "run_id": "t", "market": "m", "depth": "superficial",
+            "model": "chatgpt", "output_language": "Russian",
+            "status": "research"}, ensure_ascii=False), encoding="utf-8")
+        (rd / "companies.json").write_text(json.dumps({
+            "market": "m", "segments": ["сегмент"],
+            "companies": [{"brand": "Тест", "segment": "сегмент"}]},
+            ensure_ascii=False), encoding="utf-8")
+        mk = lambda prose, extra_src: {"entity": "Тест", "fields": {
+            "description": {"value": prose, "source": "https://a.ru/x"},
+            "other": {"value": "y", "source": extra_src}}}
+        (rd / "agent_runs" / "тест_A.json").write_text(
+            json.dumps(mk(self._PROSE, "https://a.ru/y"), ensure_ascii=False),
+            encoding="utf-8")
+        (rd / "agent_runs" / "тест_B.json").write_text(
+            json.dumps(mk(b_prose, "https://b-only.ru/z"), ensure_ascii=False),
+            encoding="utf-8")
+        (rd / "agent_runs" / "тест_record.json").write_text(
+            json.dumps({"entity": "Тест", "fields": {}}, ensure_ascii=False),
+            encoding="utf-8")
+        return rd
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_bcopy_gets_redo_collector_b_prompt(self):
+        rd = self._make_run(b_prose=self._PROSE)          # B copied A verbatim
+        kind, text = runs.next_prompt(rd)
+        self.assertEqual(kind, "repair")
+        self.assertIn("Redo Collector B", text)
+        self.assertIn("тест_B.json", text)
+        self.assertNotIn("Fix ONLY the fields listed", text)
+
+    def test_record_rejects_keep_normal_repair_prompt(self):
+        rd = self._make_run(b_prose="Совсем другой независимый текст про Тест "
+                                    "от собственного исследования прессы.")
+        kind, text = runs.next_prompt(rd)                 # record fails, B is fine
+        self.assertEqual(kind, "repair")
+        self.assertIn("Repair pass", text)
+        self.assertNotIn("Redo Collector B", text)
+
+
 if __name__ == "__main__":
     unittest.main()

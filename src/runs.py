@@ -548,10 +548,22 @@ def next_prompt(run_dir: Path, batch: int = 3) -> tuple[str, str]:
                 # repair in batches too — a 30-company repair pass would just
                 # re-trigger the single-turn overload the app exists to avoid
                 kind = "repair"
-                text = gate.render_repair_prompt(
-                    meta["market"], meta["output_language"],
-                    f"logs/{meta['run_id']}/agent_runs",
-                    g["rejected"][:max(batch, 2)], segments)
+                # Collector-B failures first: they are computed from the _A/_B
+                # files, so a record repair can never clear them — they need a
+                # fresh B pass (mirrors the API-mode routing in api_runner)
+                b_fail = [e for e in g["rejected"]
+                          if {i["code"] for i in e["issues"]
+                              if i["severity"] == "reject"} & gate.B_CODES]
+                if b_fail:
+                    text = gate.render_b_redo_prompt(
+                        meta["market"], meta["output_language"],
+                        f"logs/{meta['run_id']}/agent_runs",
+                        b_fail[:max(batch, 2)])
+                else:
+                    text = gate.render_repair_prompt(
+                        meta["market"], meta["output_language"],
+                        f"logs/{meta['run_id']}/agent_runs",
+                        g["rejected"][:max(batch, 2)], segments)
             else:
                 kind = "done"
                 text = (f"# All {len(g['accepted'])} records passed the ingest gate.\n\n"
