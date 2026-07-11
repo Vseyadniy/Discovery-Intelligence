@@ -205,7 +205,17 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
             hint = str(seg_by_brand.get(brand, ""))[:200]
             t0 = time.time()
             try:
-                grd = {}
+                # resume: a collector file saved by a previous (partly failed)
+                # attempt is reused as-is — pressing ⚡ again redoes only the
+                # missing passes, never finished work
+                a = gate._load(ar / f"{stem}_A.json")
+                b = gate._load(ar / f"{stem}_B.json")
+                engine, grd = "resumed", {}
+                ga = gb = {}
+                if a is not None or b is not None:
+                    have = " + ".join(x for x, v in (("A", a), ("B", b)) if v is not None)
+                    log(f"[api] {brand} ({n}/{len(todo)}): resuming — collector "
+                        f"{have} already saved, redoing only the rest")
                 if mr.MODE == "deepseek":
                     # v1 safety measure: DeepSeek research uses the app's web
                     # tools, whose SourceLog travels through the module-global
@@ -214,37 +224,60 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
                     # browsing. So deepseek runs A then B SEQUENTIALLY, each
                     # grounded right after its own pass. TODO: pass a SourceLog
                     # explicitly per collector, then re-join the parallel path.
-                    log(f"[api] {brand} ({n}/{len(todo)}): collectors A, then B "
-                        f"(sequential on DeepSeek) — a research pass takes minutes…")
-                    a_raw, engine = mr.collect(
-                        _SYS, _collector_prompt("a", brand, hint, schema, registry, corrections),
-                        16000, _ev(log, f"🟦 Collector A · {brand} ({n}/{len(todo)})"))
-                    a = mr.extract_json(a_raw)
-                    ga = _ground(a, log, f"Collector A · {brand}")
-                    b_raw, _ = mr.collect(
-                        _SYS, _collector_prompt("b", brand, hint, schema, registry, corrections),
-                        16000, _ev(log, f"🟩 Collector B · {brand} ({n}/{len(todo)})"))
-                    b = mr.extract_json(b_raw)
-                    gb = _ground(b, log, f"Collector B · {brand}")
+                    if a is None and b is None:
+                        log(f"[api] {brand} ({n}/{len(todo)}): collectors A, then B "
+                            f"(sequential on DeepSeek) — a research pass takes minutes…")
+                    if a is None:
+                        a_raw, engine = mr.collect(
+                            _SYS, _collector_prompt("a", brand, hint, schema, registry, corrections),
+                            16000, _ev(log, f"🟦 Collector A · {brand} ({n}/{len(todo)})"))
+                        a = mr.extract_json(a_raw)
+                        ga = _ground(a, log, f"Collector A · {brand}")
+                        a.update(entity=brand, collector="A")
+                        _save(ar / f"{stem}_A.json", a)  # save NOW: a B failure must not cost A's pass
+                    if b is None:
+                        b_raw, engine = mr.collect(
+                            _SYS, _collector_prompt("b", brand, hint, schema, registry, corrections),
+                            16000, _ev(log, f"🟩 Collector B · {brand} ({n}/{len(todo)})"))
+                        b = mr.extract_json(b_raw)
+                        gb = _ground(b, log, f"Collector B · {brand}")
+                        b.update(entity=brand, collector="B")
+                        _save(ar / f"{stem}_B.json", b)
                     grd = {k: ga.get(k, 0) + gb.get(k, 0) for k in {*ga, *gb}}
                 else:
-                    log(f"[api] {brand} ({n}/{len(todo)}): collectors A+B in parallel — "
-                        f"a research pass takes several minutes…")
+                    if a is None and b is None:
+                        log(f"[api] {brand} ({n}/{len(todo)}): collectors A+B in parallel — "
+                            f"a research pass takes several minutes…")
                     with ThreadPoolExecutor(max_workers=2) as ex:
                         fa = ex.submit(mr.collect, _SYS,
                                        _collector_prompt("a", brand, hint, schema, registry, corrections),
-                                       16000, _ev(log, f"🟦 Collector A · {brand} ({n}/{len(todo)})"))
+                                       16000, _ev(log, f"🟦 Collector A · {brand} ({n}/{len(todo)})")
+                                       ) if a is None else None
                         fb = ex.submit(mr.collect, _SYS,
                                        _collector_prompt("b", brand, hint, schema, registry, corrections),
-                                       16000, _ev(log, f"🟩 Collector B · {brand} ({n}/{len(todo)})"))
-                        a_raw, engine = fa.result()
-                        b_raw, _ = fb.result()
-                    a = mr.extract_json(a_raw)
-                    b = mr.extract_json(b_raw)
-                a.update(entity=brand, collector="A")
-                _save(ar / f"{stem}_A.json", a)
-                b.update(entity=brand, collector="B")
-                _save(ar / f"{stem}_B.json", b)
+                                       16000, _ev(log, f"🟩 Collector B · {brand} ({n}/{len(todo)})")
+                                       ) if b is None else None
+                        # harvest BOTH futures before re-raising: one failed
+                        # collector must not throw away the other's finished pass
+                        err = None
+                        if fa is not None:
+                            try:
+                                a_raw, engine = fa.result()
+                                a = mr.extract_json(a_raw)
+                                a.update(entity=brand, collector="A")
+                                _save(ar / f"{stem}_A.json", a)
+                            except Exception as e:
+                                err = e
+                        if fb is not None:
+                            try:
+                                b_raw, engine = fb.result()
+                                b = mr.extract_json(b_raw)
+                                b.update(entity=brand, collector="B")
+                                _save(ar / f"{stem}_B.json", b)
+                            except Exception as e:
+                                err = err or e
+                        if err is not None:
+                            raise err
                 log(f"[api] {brand}: collectors done in {int(time.time() - t0)}s; verifier…")
                 v_raw, _ = mr.verify(_SYS, _verifier_prompt(a, b, schema, corrections),
                                      escalate=False,

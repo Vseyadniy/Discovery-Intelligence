@@ -274,18 +274,21 @@ def _run_deepseek_tools(system: str, user: str, max_tokens: int = 16000,
     fetch_idxs: list[int] = []   # indices of fetch_url tool results, for trimming
     calls = 0
     nudged = False
+    exhausted_rounds = 0
     while True:
         capped = calls >= _DS_MAX_TOOL_CALLS
-        kwargs = dict(model=DEEPSEEK_MODEL, max_tokens=max_tokens,
-                      messages=messages)
-        if not capped:
-            kwargs.update(tools=_DS_TOOLS, tool_choice="auto")
-        # capped → no tools param at all: DeepSeek answers unreliably when
-        # tools are offered but tool_choice="none" forbids using them.
+        # Tools stay in the request even past the call budget: REMOVING them
+        # mid-conversation made DeepSeek leak its internal tool markup
+        # ('<｜DSML｜…') as plain text instead of answering (seen live on
+        # BPMSoft/Digital Design). Past the budget, tool calls are simply not
+        # executed — each gets a budget-exhausted error payload, which keeps
+        # the model in valid function-calling mode and steers it to finish.
         # STREAMED like every other engine here: a non-streaming call sits
         # silent for the whole generation (the final JSON can take minutes),
         # freezing the app's status line and risking idle-connection stalls.
-        kwargs["stream"] = True
+        kwargs = dict(model=DEEPSEEK_MODEL, max_tokens=max_tokens,
+                      messages=messages, tools=_DS_TOOLS, tool_choice="auto",
+                      stream=True)
         ev("thinking", "")   # liveness between tool batches: the status line
         content_parts: list[str] = []   # must move even while the model decides
         acc: dict[int, dict] = {}          # tool-call deltas keyed by index
@@ -320,7 +323,17 @@ def _run_deepseek_tools(system: str, user: str, max_tokens: int = 16000,
                                   "function": {"name": t["name"],
                                                "arguments": t["arguments"]}}
                                  for t in tool_calls]})
+            batch_exhausted = False
             for t in tool_calls:
+                if calls >= _DS_MAX_TOOL_CALLS:
+                    batch_exhausted = True
+                    messages.append({"role": "tool", "tool_call_id": t["id"],
+                                     "content": json.dumps({"error": (
+                                         f"tool budget exhausted ({_DS_MAX_TOOL_CALLS} "
+                                         "calls) — stop researching and return the "
+                                         "strict JSON answer now, using only sources "
+                                         "already consulted")}, ensure_ascii=False)})
+                    continue
                 calls += 1
                 log.tool_calls = calls
                 try:
@@ -359,10 +372,17 @@ def _run_deepseek_tools(system: str, user: str, max_tokens: int = 16000,
                 except Exception:
                     dropped = ""
                 messages[i]["content"] = f"[dropped from context: {dropped}]"
-            if calls >= _DS_MAX_TOOL_CALLS:
-                messages.append({"role": "user", "content":
-                    "Finish now: return the strict JSON using only sources "
-                    "already consulted."})
+            if batch_exhausted:
+                exhausted_rounds += 1
+                if exhausted_rounds == 1:
+                    messages.append({"role": "user", "content":
+                        "Finish now: return the strict JSON using only sources "
+                        "already consulted."})
+                elif exhausted_rounds > 3:
+                    raise RuntimeError(
+                        f"{DEEPSEEK_MODEL} kept requesting tools after the "
+                        f"{_DS_MAX_TOOL_CALLS}-call budget ran out — retry, or "
+                        f"pick ChatGPT / Claude / Grok for this step")
             continue
         text = content.strip()
         if text and "{" in text:
