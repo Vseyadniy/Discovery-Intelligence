@@ -157,7 +157,8 @@ class TestFailedRepairsDoNotCountOrBlank(unittest.TestCase):
 
     RECORD = {"entity": BRAND,
               "fields": {"headcount": {"value": "120", "source": ""}}}
-    ISSUES = [{"field": "headcount", "code": "unsourced", "severity": "reject"}]
+    ISSUES = [{"field": "headcount", "code": "unsourced", "severity": "reject",
+               "reason": "value has no source URL"}]
     SIG = "headcount:unsourced"
 
     def setUp(self):
