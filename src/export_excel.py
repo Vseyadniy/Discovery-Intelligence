@@ -259,7 +259,8 @@ def _record_to_row(rec: dict, cols: list[str] | None = None) -> dict:
               if f not in ("revenue", "brand_name") or f in fields])
     row["data_quality"] = f"{q['status']} · {q['coverage_pct']}%" + (
         f" · mandatory gaps: {', '.join(q['mandatory_gaps'][:3])}"
-        if q["mandatory_gaps"] else "")
+        if q["mandatory_gaps"] else "") + (
+        f" · product-rev: {q['product_basis']}" if q.get("product_basis") else "")
     row["_low_conf"] = [field_to_col[f] for f in q["low_confidence"]
                         if f in field_to_col]      # peach fill per CELL
     return row

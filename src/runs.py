@@ -346,15 +346,24 @@ The rusprofile.ru / list-org.com company CARD publishes the multi-year financial
 table — copy each year, do not stop at the latest:
 - `total_revenue_2022` … `total_revenue_2025` — filed total revenue per year;
 - `product_revenue_2022` … `product_revenue_2025` — the researched segment's share
-  per year (estimate + basis in `assumptions` when not published directly);
+  per year. EVIDENCE HIERARCHY, in order: (1) a directly published product/segment
+  figure; (2) deterministic calculation from sourced inputs — a mono-product /
+  pure-play company's product revenue IS its total revenue; (3) an evidence-based
+  estimate from business model, product portfolio, rankings, cases, reported
+  segment shares; (4) blank + review_flag ONLY when no defensible estimate can be
+  made. After a reasonable attempt to find a published figure, SWITCH to (2)/(3)
+  instead of re-searching a number that is not public. Use a range
+  («700–900 млн ₽») when uncertainty is high — never fake precision;
 - `ebitda_2022` … `ebitda_2025` — only if published (statements/press); otherwise
   blank + review_flag;
 - `revenue_yoy_24_25`, `product_rev_yoy_24_25`, `ebitda_yoy_24_25` — computed from
   the corresponding 2024/2025 pairs (blank when a pair is missing);
   `revenue_2026_projection` from stated guidance or extrapolation (say which in
   `assumptions`);
-- `product_revenue_source` — the URL + one-line method behind the product-revenue
-  figures (rating / registry / press).
+- `product_revenue_source` — REQUIRED whenever product figures are filled; START
+  with the basis tag: «напрямую: <URL>» | «расчёт: <формула + sourced inputs>» |
+  «оценка: <сигналы + допущения>». Derived YoY/projection values inherit the
+  LOWEST confidence among their inputs.
 
 ## latest_news — significant events only
 Counts: **acquisition/M&A, partnership, new product launch, new technology pilot,
@@ -564,7 +573,15 @@ def autofix_records(run_dir: Path) -> dict:
             v1, v2 = _mln(i1), _mln(i2)
             if v1 and v2 is not None and v1 != 0:
                 pct = round((v2 - v1) / abs(v1) * 100)
-                fields[yoy] = {"value": f"{pct}%", "source": ""}
+                # derived values inherit the LOWEST confidence of their inputs
+                confs = [str(fields[i].get("confidence", "")).lower()
+                         for i in (i1, i2) if isinstance(fields.get(i), dict)]
+                new_f = {"value": f"{pct}%", "source": ""}
+                if "low" in confs:
+                    new_f["confidence"] = "low"
+                elif "medium" in confs:
+                    new_f["confidence"] = "medium"
+                fields[yoy] = new_f
                 notes.append(f"{yoy}: computed {pct}% from {i1}/{i2}")
 
         # money value whose numeric head parses but a prose tail breaks it
@@ -836,6 +853,10 @@ def telemetry_summary(run_dir: Path) -> str:
             out.append(f"quality of accepted: complete {complete} · with gaps {gaps} "
                        f"(mandatory-field gaps {mand}) · with low-confidence "
                        f"evidence {low} · avg field coverage {avg_cov}%")
+            from collections import Counter as _C
+            bases = _C((q["product_basis"] or "no figures") for q in qs)
+            out.append("product revenue basis: " + " · ".join(
+                f"{b} {n}" for b, n in sorted(bases.items(), key=lambda kv: -kv[1])))
         out.append("")
     except Exception:
         out += ["(run state unavailable — events only)", ""]

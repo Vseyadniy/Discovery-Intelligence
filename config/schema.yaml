@@ -124,7 +124,7 @@ fields:
     desc: "Projected 2026 total revenue, «N млн ₽». Stated company/analyst guidance if any; otherwise extrapolate from YoY and say so in assumptions."
   - name: product_revenue_source
     type: string
-    desc: "Where the PRODUCT-line revenue figures come from: the rating/registry/press URL + a one-line method (e.g. «smart-ranking.ru рейтинг 2025; доля сегмента ~60% по структуре продуктов»)."
+    desc: "REQUIRED when product figures are filled. START with the basis tag: «напрямую: <URL опубликованной цифры>» | «расчёт: <формула + sourced inputs; моно-продукт ⇒ выручка продукта = вся выручка>» | «оценка: <сигналы: бизнес-модель, портфель, рейтинги, кейсы, доли + допущения>»."
   - name: headcount
     type: string
     estimate: true

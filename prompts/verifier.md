@@ -37,6 +37,12 @@ Collector B output:
 5. You do NOT browse. Consolidate only the evidence already inside A and B — if
    it is insufficient, leave the field blank + `review_flags` note instead of
    promoting a weak source.
+6. `product_revenue_*`: prefer the higher evidence level — «напрямую» (published
+   figure) beats «расчёт» (deterministic from sourced inputs) beats «оценка»
+   (evidence-based estimate). Carry the winning method into
+   `product_revenue_source`, TAGGED with its level. Derived YoY / projection
+   fields inherit the LOWEST confidence among their inputs; ranges
+   («700–900 млн ₽») are valid values, do not collapse them to a midpoint.
 
 ## Final confidence rules
 - `high`  : official primary source, OR ≥2 independent sources agree.

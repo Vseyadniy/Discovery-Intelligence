@@ -58,6 +58,12 @@ page (or a copy of it on another domain) already consulted this session.
 - **Figures the press reports** (`*revenue*`, `headcount`): take them with the
   ranking/article as source and honest confidence; do not hunt for a third
   repetition of the same number.
+- **Product-line revenue**: if no published product figure appears after 2–3
+  searches, SWITCH to an estimate — rankings, reported segment shares, cases
+  and the business model are legitimate signals. Tag `product_revenue_source`
+  with «напрямую: <URL>» | «расчёт: <формула + входы>» | «оценка: <сигналы +
+  допущения>»; use a range («700–900 млн ₽») when uncertain. Blank ONLY when
+  no defensible estimate exists.
 
 Broaden beyond the priority class ONLY while a field is missing, conflicting,
 or would be `low` confidence — and stop as soon as that reason disappears.

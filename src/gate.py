@@ -91,6 +91,37 @@ _PRODUCT_REV_FIELDS = ("product_revenue_2022", "product_revenue_2023",
                        "product_revenue_2024", "product_revenue_2025",
                        "product_rev_yoy_24_25")
 
+# Product-revenue evidence hierarchy: the method column (product_revenue_source)
+# declares HOW the figures were obtained, tagged with its first word.
+#   напрямую (direct)   — published product/segment figure, URL in the method
+#   расчёт  (calculated) — deterministic from sourced inputs (mono-product ⇒
+#                          product revenue IS total revenue)
+#   оценка  (estimated)  — evidence-based estimate: business model, portfolio,
+#                          rankings, cases, reported segment shares
+# Figures with a declared расчёт/оценка are legitimate WITHOUT per-year URLs —
+# their provenance is the method text; figures with NO method at all stay a
+# reject (product-source-missing).
+_BASIS_TAGS = (("напрямую", "direct"), ("прямо", "direct"), ("direct", "direct"),
+               ("расч", "calculated"), ("рассчит", "calculated"),
+               ("calculat", "calculated"),
+               ("оцен", "estimated"), ("estimat", "estimated"))
+
+
+def product_revenue_basis(fields: dict) -> str | None:
+    """direct | calculated | estimated | untagged (method text without a tag) |
+    unavailable (figures but no method) | None (no product figures at all)."""
+    if not any(value_of(fields.get(n)) is not None for n in _PRODUCT_REV_FIELDS):
+        return None
+    prs = value_of(fields.get("product_revenue_source"))
+    if prs is None or is_placeholder(prs):
+        return "unavailable"
+    head = str(prs).strip().lower().lstrip("«\"'~ ")
+    for tag, basis in _BASIS_TAGS:
+        if head.startswith(tag):
+            return basis
+    return "untagged"
+
+
 # Computed/extrapolated fields have no URL of their own BY DESIGN (the schema
 # says: compute YoY from the year pair, extrapolate 2026). They are exempt from
 # `unsourced` when every input they are computed FROM is itself sourced —
@@ -179,7 +210,22 @@ _MONEY_RE = re.compile(
 
 def normalize_money(v) -> str | None:
     """Canonicalize any ruble amount to «N млн ₽» (~ prefix kept for estimates).
-    None if the value can't be parsed confidently."""
+    Honest uncertainty ranges «700–900 млн ₽» are valid (en/em dash) and
+    canonicalize both ends. None if the value can't be parsed confidently."""
+    parts = re.split(r"\s*[–—]\s*", str(v).strip())
+    if len(parts) == 2:
+        hi = _money_one(parts[1])
+        if hi:
+            # a bare low end («0,7–0,9 млрд ₽») borrows the ORIGINAL unit text
+            unit_src = re.sub(r"^[~≈\s]*[-−\d\s.,]+", "", parts[1])
+            lo = _money_one(parts[0]) or _money_one(f"{parts[0]} {unit_src}")
+            if lo:
+                return f"{lo.replace(' млн ₽', '')}–{hi}"
+        return None
+    return _money_one(parts[0])
+
+
+def _money_one(v) -> str | None:
     m = _MONEY_RE.match(str(v).strip())
     if not m:
         return None
@@ -301,6 +347,9 @@ def validate_record(rec: dict, a: dict | None, b: dict | None,
         elif name not in _META_FIELDS:
             if name in _COMPUTED_INPUTS and _inputs_sourced(fields, _COMPUTED_INPUTS[name]):
                 pass   # computed from sourced inputs — no URL of its own
+            elif (name in _PRODUCT_REV_FIELDS
+                  and product_revenue_basis(fields) not in (None, "unavailable")):
+                pass   # provenance lives in product_revenue_source (method column)
             else:
                 add(name, "reject", "unsourced", "value has no source URL")
         conflict = f.get("conflict") if isinstance(f, dict) else None
@@ -432,12 +481,15 @@ def validate_record(rec: dict, a: dict | None, b: dict | None,
 
     # product-revenue figures without their method column: a reader cannot tell
     # a filed number from a calculated estimate
-    prs = value_of(fields.get("product_revenue_source"))
-    if (prs is None or is_placeholder(prs)) and any(
-            value_of(fields.get(n)) is not None for n in _PRODUCT_REV_FIELDS):
+    basis = product_revenue_basis(fields)
+    if basis == "unavailable":
         add("product_revenue_source", "reject", "product-source-missing",
             "product revenue figures are filled but product_revenue_source is empty — "
             "state whether they come directly from a filing/rating or are estimated, and how")
+    elif basis == "untagged":
+        add("product_revenue_source", "warn", "product-basis-untagged",
+            "start the method with «напрямую:», «расчёт:» or «оценка:» so the "
+            "evidence basis is explicit and machine-readable")
 
     # Collector B independence (the most-faked part of past runs)
     if b is None:
@@ -510,7 +562,8 @@ def record_quality(rec: dict, schema_fields: list[str] | None = None) -> dict:
     return {"status": status, "coverage_pct": coverage, "missing": missing,
             "unresolved": unresolved, "low_confidence": low,
             "mandatory_gaps": mandatory_gaps, "fields_total": len(names),
-            "fields_filled": filled}
+            "fields_filled": filled,
+            "product_basis": product_revenue_basis(fields)}
 
 
 # ── whole-run gate ────────────────────────────────────────────────────────────
@@ -594,7 +647,10 @@ _HINTS = {
                    "field blank and add a review_flags entry naming the URL you opened.",
     "search-url": "Open the actual company card / article that the search returns and cite THAT page + a snippet from it.",
     "bad-source": "Every source must be a live public URL you opened this session — never a repo path.",
-    "unsourced": "Add the live URL + snippet the value came from, or blank the field.",
+    "unsourced": "Add the live URL + snippet the value came from, or blank the field. "
+                 "EXCEPTION product_revenue_*: a tagged method in product_revenue_source "
+                 "(«расчёт: …» / «оценка: …») is valid provenance — do not hunt for a "
+                 "URL that does not exist.",
     "meta-news": "Find one significant dated event (M&A, partnership, product launch, tech pilot, leadership "
                  "change, major funding, major incident) with its date and source. If none exists, leave the "
                  "field blank and add a review_flag.",
@@ -634,10 +690,12 @@ _HINTS = {
     "b-copy": "Redo the Collector B pass from scratch: fresh wording taken from third-party sources, not A's text.",
     "b-no-new-source": "Collector B must cite at least one source A did not use (press, ranking, analyst, industry portal).",
     "bad-json": "Re-save the file as strict JSON (no prose around it).",
-    "product-source-missing": "Fill product_revenue_source with the URL you used + one line on the method: "
-                              "either «напрямую из <отчётность/рейтинг>» or «оценка: <метод и допущения>». "
-                              "If the product-line figures cannot be traced to any source, blank them and "
-                              "add a review_flags note instead.",
+    "product-source-missing": "Fill product_revenue_source, tagged with the evidence level: "
+                              "«напрямую: <URL опубликованной сегментной выручки>» | «расчёт: <формула + "
+                              "sourced inputs; моно-продуктовая компания ⇒ выручка продукта = вся выручка>» "
+                              "| «оценка: <сигналы: бизнес-модель, портфель, рейтинги, кейсы, доли + "
+                              "допущения>». Range values («700–900 млн ₽») are fine when uncertain. Blank "
+                              "the figures + review_flags ONLY if no defensible estimate exists.",
 }
 
 

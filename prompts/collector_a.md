@@ -81,9 +81,17 @@ consulted this session — spend the budget on UNRESOLVED fields instead.
   `business_model`, `target_customers`, `positioning`, `website`): the company's
   OWN pages first — product, pricing, «О компании». Stop once you can name
   specifics; skip SEO catalogs and reseller copies of the same text.
-- **Product-line revenue** (`product_revenue_*`, `product_revenue_source`): a
-  sector rating / analyst table (tier 2) or a stated split; otherwise derive it
-  and SAY HOW in `product_revenue_source`. Do not chase forum guesses.
+- **Product-line revenue** (`product_revenue_*`) — evidence hierarchy, in order:
+  (1) «напрямую:» a published product/segment figure (rating, analyst table,
+  stated split); (2) «расчёт:» deterministic from sourced inputs — a
+  mono-product / pure-play company's product revenue IS its total revenue;
+  (3) «оценка:» evidence-based, from business model, product portfolio,
+  rankings, cases, reported segment shares. After 2–3 searches without a
+  published figure, SWITCH to (2)/(3) — the number is probably not public.
+  Tag `product_revenue_source` with the basis + inputs + assumptions; use a
+  range («700–900 млн ₽») when uncertainty is high — never fake precision;
+  derived YoY values inherit the LOWEST confidence of their inputs. Blank +
+  review_flag ONLY when no defensible estimate exists.
 
 Broaden beyond the priority class ONLY while a field is still missing, sources
 conflict, or your confidence would be `low` — and stop as soon as that reason
