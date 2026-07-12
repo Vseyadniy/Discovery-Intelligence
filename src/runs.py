@@ -768,11 +768,15 @@ def _telemetry_data(run_dir: Path) -> dict | None:
         lines = (run_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
     except FileNotFoundError:
         return None
+    from collections import Counter
     stages: dict[str, dict] = {}
     gates, autofixed, salvaged = [], 0, 0
     failed_brands: dict[str, set] = {}
     passed_brands: dict[str, set] = {}
     repair_brands: dict[str, int] = {}
+    fail_cats: Counter = Counter()      # explicit error taxonomy of failures
+    waste: dict[str, int] = {}          # spend burned by FAILED passes
+    outcomes: Counter = Counter()       # repair effectiveness (sig vs sig_after)
     for line in lines:
         try:
             ev = json.loads(line)
@@ -796,11 +800,22 @@ def _telemetry_data(run_dir: Path) -> dict | None:
         if name.endswith("_failed"):
             s["failed"] += 1
             failed_brands.setdefault(stage, set()).add(brand)
+            fail_cats[ev.get("category", "uncategorized")] += 1
+            for k in ("seconds", "tool_calls", "tokens_in", "tokens_out"):
+                v = ev.get(k)
+                if isinstance(v, (int, float)) and v:
+                    waste[k] = waste.get(k, 0) + v
             continue
         s["passes"] += 1
         passed_brands.setdefault(stage, set()).add(brand)
         if name == "api_repair" and brand:
             repair_brands[brand] = repair_brands.get(brand, 0) + 1
+            if "sig_after" in ev:
+                before = set(str(ev.get("sig", "")).split(",")) - {""}
+                after = set(str(ev.get("sig_after", "")).split(",")) - {""}
+                outcomes["cleared" if not after else
+                         "improved" if len(after) < len(before) else
+                         "no change"] += 1
         if ev.get("resumed"):
             s["resumed"] += 1
         if "tokens_in" in ev or "tokens_out" in ev:
@@ -815,7 +830,8 @@ def _telemetry_data(run_dir: Path) -> dict | None:
                 s[k] += v
     return {"stages": stages, "gates": gates, "autofixed": autofixed,
             "salvaged": salvaged, "failed_brands": failed_brands,
-            "passed_brands": passed_brands, "repair_brands": repair_brands}
+            "passed_brands": passed_brands, "repair_brands": repair_brands,
+            "fail_cats": fail_cats, "waste": waste, "outcomes": outcomes}
 
 
 def telemetry_summary(run_dir: Path) -> str:
@@ -831,6 +847,7 @@ def telemetry_summary(run_dir: Path) -> str:
 
     # live run state — meaningful for partial runs (pending) and finished ones
     out = [f"# Run summary — {run_dir.name}", ""]
+    unres_live: dict[str, list] = {}
     try:
         meta = _load_meta(run_dir)
         brands, _n, _s = manifest(run_dir)
@@ -843,8 +860,11 @@ def telemetry_summary(run_dir: Path) -> str:
         # quality layer on top of the gate: complete vs accepted-with-gaps
         if g["accepted"]:
             schema_fields = [f["name"] for f in load_schema()["fields"]]
-            qs = [gate.record_quality(e["record"], schema_fields)
-                  for e in g["accepted"]]
+            pairs = [(e["entity"], gate.record_quality(e["record"], schema_fields))
+                     for e in g["accepted"]]
+            qs = [q for _e, q in pairs]
+            unres_live = {ent: q["unresolved"] for ent, q in pairs
+                          if q["unresolved"]}
             complete = sum(1 for q in qs if q["status"] == "complete")
             gaps = sum(1 for q in qs if q["missing"] or q["unresolved"])
             low = sum(1 for q in qs if q["low_confidence"])
@@ -920,7 +940,16 @@ def telemetry_summary(run_dir: Path) -> str:
                    f"({tot['fetches'] / tot['searches']:.1f} per search) · "
                    f"{tot['grounding_affected']} cited sources stripped by grounding")
 
-    # failures & retries
+    # failures & retries — with the spend they burned and their categories
+    if d["waste"]:
+        w = d["waste"]
+        out.append(f"**Failure waste** (spend of failed passes): "
+                   f"{w.get('tool_calls', 0)} tool calls · "
+                   f"{w.get('tokens_in', 0)}+{w.get('tokens_out', 0)} tokens · "
+                   f"{w.get('seconds', 0)}s")
+    if d["fail_cats"]:
+        out.append("**Failures by category**: " + " · ".join(
+            f"{c} {n}" for c, n in d["fail_cats"].most_common()))
     fb = d["failed_brands"].get("research", set())
     if fb:
         rec = fb & d["passed_brands"].get("research", set())
@@ -931,7 +960,10 @@ def telemetry_summary(run_dir: Path) -> str:
         top = sorted(d["repair_brands"].items(), key=lambda kv: -kv[1])[:3]
         out.append(f"**Repairs**: {sum(d['repair_brands'].values())} passes over "
                    f"{len(d['repair_brands'])} companies (most: "
-                   + ", ".join(f"{b} ×{n}" for b, n in top) + ")")
+                   + ", ".join(f"{b} ×{n}" for b, n in top) + ")"
+                   + (" · outcomes: " + " / ".join(
+                       f"{k} {v}" for k, v in d["outcomes"].most_common())
+                      if d["outcomes"] else ""))
     if d["autofixed"] or d["salvaged"]:
         out.append(f"**Local healing** (no API): autofixed fields "
                    f"{d['autofixed']} · salvaged fields {d['salvaged']}")
@@ -944,6 +976,10 @@ def telemetry_summary(run_dir: Path) -> str:
         if last_codes:
             out.append("last reject codes: " + ", ".join(
                 f"{c}×{n}" for c, n in sorted(last_codes.items())))
+    if unres_live:
+        out += ["", "## Unresolved fields (live gate state)"]
+        out += [f"- {ent}: {', '.join(flds)}"
+                for ent, flds in list(unres_live.items())[:12]]
     if gap_notes:
         out += ["", "## Data gaps (recorded before telemetry — n/a, not zero)",
                 *[f"- {g_}" for g_ in gap_notes]]

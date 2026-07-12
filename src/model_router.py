@@ -58,6 +58,13 @@ def set_mode(m: str) -> None:
     MODE = _canon_mode(m) or MODE
 
 
+def reset_source_log() -> None:
+    """Called before each research/repair attempt so a failure is never
+    attributed to the PREVIOUS pass's SourceLog."""
+    global LAST_SOURCE_LOG
+    LAST_SOURCE_LOG = None
+
+
 # ── research engine: GPT-5.5 (OpenAI Responses API + web_search) ──────────────
 # The designated researcher. Web-capable via the Responses API web_search tool, so
 # collectors research live sources instead of answering from memory. Defaults to
@@ -311,6 +318,9 @@ def _run_deepseek_tools(system: str, user: str, max_tokens: int = 16000,
     require_search_key()   # fail fast — before any model tokens are spent
     ev = on_event or (lambda a, d: None)
     log = SourceLog()
+    global LAST_SOURCE_LOG
+    LAST_SOURCE_LOG = log   # published up-front: if this pass fails mid-way its
+    # spend (tokens/tool calls) must still be attributable in telemetry
     t_start = _time.time()
     quota_announced = False
     # idle timeout catches a stream that stops sending chunks (the «frozen at

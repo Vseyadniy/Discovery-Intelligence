@@ -112,6 +112,37 @@ def _save(path: Path, obj: dict) -> None:
     path.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+# Explicit failure taxonomy for telemetry (order matters — first match wins)
+_ERR_CATEGORIES = (
+    ("timeout", ("timeout", "timed out", "deadline", "exceeded")),
+    ("stream", ("connection", "stream", "chunk", "reset", "incomplete")),
+    ("quota", ("quota", "402", "429", "payment", "rate limit")),
+    ("budget", ("budget", "kept requesting", "tool calls nor")),
+    ("parse", ("json", "unbalanced")),
+    ("provider", ("api", "500", "502", "503", "unavailable", "billing",
+                  "authentication", "not active")),
+)
+
+
+def _error_category(ex: Exception) -> str:
+    s = f"{type(ex).__name__}: {ex}".lower()
+    for cat, keys in _ERR_CATEGORIES:
+        if any(k in s for k in keys):
+            return cat
+    return "other"
+
+
+def _fail_stats() -> dict:
+    """Spend of a FAILED pass (tokens/tool calls burned for nothing) — from the
+    partial SourceLog the DeepSeek loop publishes up-front. Empty for providers
+    without app-side tools and for failures before any model call."""
+    if mr.MODE == "deepseek" and mr.LAST_SOURCE_LOG is not None:
+        slog = mr.LAST_SOURCE_LOG
+        return {"tool_calls": slog.tool_calls,
+                **{k: v for k, v in slog.stats.items() if v}}
+    return {}
+
+
 def _err_for_event(ex: Exception) -> str:
     """Failure text as persisted in events.jsonl: exception type + message with
     any URLs masked (error strings can embed model-output snippets or request
@@ -276,6 +307,7 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
             hint = str(seg_by_brand.get(brand, ""))[:200]
             t0 = time.time()
             try:
+                mr.reset_source_log()   # failures must not inherit a stale log
                 # resume: a collector file saved by a previous (partly failed)
                 # attempt is reused as-is — pressing ⚡ again redoes only the
                 # missing passes, never finished work
@@ -366,7 +398,9 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
             except Exception as ex_err:                      # keep the batch alive
                 failed.append(f"{brand} ({type(ex_err).__name__}: {str(ex_err)[:120]})")
                 runs._event(run_dir, "api_company_failed", brand=brand,
-                            error=_err_for_event(ex_err))
+                            error=_err_for_event(ex_err),
+                            category=_error_category(ex_err),
+                            seconds=int(time.time() - t0), **_fail_stats())
                 log(f"[api] {brand} FAILED after {int(time.time() - t0)}s — continuing")
         summary = f"researched {len(done)}/{len(todo)}: {', '.join(done) or '—'}"
         if failed:
@@ -481,8 +515,12 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
             # fields are among the failures (and evidence keeps appearing)
             important = any(i["field"] in (*gate.REQUIRED_FIELDS, *gate.REGISTRY_FIELDS)
                             for i in issues)
+            schema_fields = [f["name"] for f in schema.get("fields", [])] or None
+            old_vals = {n: gate.value_of(f)
+                        for n, f in (e["record"].get("fields") or {}).items()}
             try:                                 # one hung/failed repair must
-                raw, engine = mr.collect(        # not block the rest of the batch
+                mr.reset_source_log()            # not block the rest of the batch
+                raw, engine = mr.collect(
                     _SYS, prompt, on_event=_ev(log, f"🔧 Repair · {e['entity']}"),
                     budget=mr.stage_budget("repair"), allow_extend=important)
                 rec = mr.extract_json(raw)
@@ -492,15 +530,29 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
                               only_fields={i["field"] for i in issues})
                 rec["entity"] = e["entity"]
                 _save(e["path"], rec)
+                # effectiveness telemetry: what this pass actually changed, and
+                # which record-level rejects remain (field NAMES only)
+                new_fields = rec.get("fields") or {}
+                changed = sorted(n for n in set(old_vals) | set(new_fields)
+                                 if old_vals.get(n) != gate.value_of(new_fields.get(n)))
+                sig_after = ",".join(sorted(
+                    f"{i['field']}:{i['code']}"
+                    for i in gate.validate_record(rec, a or None, b or None,
+                                                  segments, schema_fields)
+                    if i["severity"] == "reject" and i["code"] not in gate.B_CODES))
                 runs._event(run_dir, "api_repair", brand=e["entity"],
-                            engine=engine, sig=sig,
+                            engine=engine, sig=sig, sig_after=sig_after,
+                            changed=len(changed),
+                            changed_fields=",".join(changed[:8]),
                             seconds=int(_t.time() - t0), **grd)
                 fixed.append(e["entity"])
             except Exception as ex_err:
                 failed.append(f"{e['entity']} ({type(ex_err).__name__}: "
                               f"{str(ex_err)[:120]})")
                 runs._event(run_dir, "api_repair_failed", brand=e["entity"],
-                            error=_err_for_event(ex_err))
+                            error=_err_for_event(ex_err),
+                            category=_error_category(ex_err),
+                            seconds=int(_t.time() - t0), **_fail_stats())
                 log(f"[api] repair {e['entity']} FAILED — continuing with the "
                     f"next company")
         summary = f"repaired {len(fixed)}: {', '.join(fixed) or '—'} — re-gate via Next prompt"
@@ -512,6 +564,28 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
             summary += _QUOTA_SUMMARY
         return summary
 
+    # everything accepted — record the run's terminal quality state once
+    # (field NAMES only, deduped so repeated ⚡ presses don't re-log it)
+    sf = [f["name"] for f in schema.get("fields", [])] or None
+    unresolved = {e["entity"]: q["unresolved"] for e in g["accepted"]
+                  if (q := gate.record_quality(e["record"], sf))["unresolved"]}
+    n_unres = sum(len(v) for v in unresolved.values())
+    already = False
+    try:
+        for line in (run_dir / "events.jsonl").read_text(encoding="utf-8").splitlines():
+            ev_ = json.loads(line)
+            if (ev_.get("event") == "run_complete"
+                    and ev_.get("accepted") == len(g["accepted"])
+                    and ev_.get("unresolved_fields") == n_unres):
+                already = True
+    except Exception:
+        pass
+    if not already:
+        runs._event(run_dir, "run_complete", accepted=len(g["accepted"]),
+                    unresolved_fields=n_unres,
+                    **({"unresolved": "; ".join(
+                        f"{k}: {', '.join(v)}" for k, v in unresolved.items())[:500]}
+                       if unresolved else {}))
     return f"all {len(g['accepted'])} records accepted — build the Excel"
 
 
