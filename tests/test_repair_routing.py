@@ -149,6 +149,97 @@ class TestRecordRepairCap(unittest.TestCase):
             self.assertIn("unresolved fields blanked", summary)
 
 
+class TestFailedRepairsDoNotCountOrBlank(unittest.TestCase):
+    """Regression: api_repair_failed is a RUNTIME failure, not research — it
+    must not advance the completed-repair counter, must not blank fields or
+    add `unresolved:` (yellow) flags, and must leave the record rejected and
+    fully eligible for its 3 completed-repair attempts."""
+
+    RECORD = {"entity": BRAND,
+              "fields": {"headcount": {"value": "120", "source": ""}}}
+    ISSUES = [{"field": "headcount", "code": "unsourced", "severity": "reject"}]
+    SIG = "headcount:unsourced"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.rd = Path(self.tmp.name)
+        (self.rd / "agent_runs").mkdir()
+        self.rec_path = self.rd / "agent_runs" / "эльба_record.json"
+        self.rec_path.write_text(json.dumps(self.RECORD, ensure_ascii=False),
+                                 encoding="utf-8")
+        for stem in ("эльба_A", "эльба_B"):
+            (self.rd / "agent_runs" / f"{stem}.json").write_text(
+                '{"fields": {}}', encoding="utf-8")
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def _run(self, collect_fn):
+        entry = {"entity": BRAND, "stem": "эльба", "path": self.rec_path,
+                 "issues": list(self.ISSUES),
+                 "record": json.loads(self.rec_path.read_text()),
+                 "verdict": "rejected"}
+        with patch.object(api_runner.runs, "_load_meta",
+                          return_value={"market": "m", "output_language": "Russian"}), \
+             patch.object(api_runner.runs, "manifest", return_value=([BRAND], "", [])), \
+             patch.object(api_runner.runs, "load_schema", return_value={}), \
+             patch.object(api_runner, "load_config", return_value=({}, {}, [])), \
+             patch.object(api_runner.runs, "_pending_brands", return_value=[]), \
+             patch.object(api_runner.runs, "salvage_records"), \
+             patch.object(api_runner.runs, "autofix_records", return_value={}), \
+             patch.object(api_runner.runs, "run_gate",
+                          return_value={"rejected": [entry], "accepted": []}), \
+             patch.object(mr, "collect", side_effect=collect_fn), \
+             patch.object(mr, "MODE", "gpt"):
+            return api_runner.run_next_step(self.rd, batch=3, log=lambda *_: None)
+
+    def _events(self, name):
+        f = self.rd / "events.jsonl"
+        if not f.exists():
+            return []
+        return [json.loads(l) for l in f.read_text(encoding="utf-8").splitlines()
+                if json.loads(l)["event"] == name]
+
+    def test_failed_events_do_not_advance_completed_counter(self):
+        for _ in range(5):
+            runs._event(self.rd, "api_repair_failed", brand=BRAND, error="boom")
+        self.assertEqual(api_runner._repair_sigs(self.rd, BRAND), [])
+
+    def test_runtime_failure_keeps_record_intact_and_rejected(self):
+        before = self.rec_path.read_text()
+
+        def boom(*a, **k):
+            raise TimeoutError("stream stalled")
+
+        summary = self._run(boom)
+        self.assertIn("FAILED", summary)
+        self.assertIn("press ⚡ again to retry", summary)
+        self.assertEqual(self.rec_path.read_text(), before)     # record untouched
+        saved = json.loads(self.rec_path.read_text())
+        self.assertNotIn("unresolved", json.dumps(saved))       # no yellow flags
+        self.assertEqual(len(self._events("api_repair_failed")), 1)
+        self.assertEqual(self._events("api_repair"), [])        # no completed attempt
+
+    def test_failures_do_not_consume_the_three_attempts(self):
+        # 5 transient failures + only 2 completed repairs → the cap (3) is NOT
+        # reached: the next ⚡ run must still attempt a real repair
+        for _ in range(5):
+            runs._event(self.rd, "api_repair_failed", brand=BRAND, error="boom")
+        for s in ("other:code", "another:code"):                # ≠ current sig
+            runs._event(self.rd, "api_repair", brand=BRAND, sig=s)
+        calls = []
+
+        def ok(*a, **k):
+            calls.append(1)
+            return '{"fields": {"headcount": {"value": "120", "source": "https://s.ru/p"}}}', "eng"
+
+        summary = self._run(ok)
+        self.assertEqual(calls, [1])                            # repair attempted
+        self.assertIn("repaired 1", summary)
+        saved = json.loads(self.rec_path.read_text())
+        self.assertNotIn("unresolved", json.dumps(saved))       # still no blanking
+
+
 class TestPromptModeRouting(unittest.TestCase):
     """runs.next_prompt must issue a «Redo Collector B» prompt for B_CODES
     rejects and the normal repair prompt for record-level rejects."""
