@@ -763,6 +763,7 @@ def telemetry_summary(run_dir: Path) -> str:
         if not stage:
             continue
         s = stages.setdefault(stage, {"passes": 0, "failed": 0, "resumed": 0,
+                                      "_has_tokens": False,
                                       **{k: 0 for k in _TELEMETRY_SUMS}})
         if name.endswith("_failed"):
             s["failed"] += 1
@@ -770,7 +771,9 @@ def telemetry_summary(run_dir: Path) -> str:
         s["passes"] += 1
         if ev.get("resumed"):
             s["resumed"] += 1
-        for k in _TELEMETRY_SUMS:
+        if "tokens_in" in ev or "tokens_out" in ev:
+            s["_has_tokens"] = True   # pre-telemetry events have NO usage data —
+        for k in _TELEMETRY_SUMS:     # absence must read n/a, not zero usage
             v = ev.get(k)
             if isinstance(v, (int, float)):
                 s[k] += v
@@ -779,11 +782,13 @@ def telemetry_summary(run_dir: Path) -> str:
         s = stages.get(stage)
         if not s:
             continue
+        tokens = (f"{s['tokens_in']}+{s['tokens_out']}" if s["_has_tokens"]
+                  else "n/a (recorded before telemetry)")
         out.append(
             f"  {stage:9} passes={s['passes']} failed={s['failed']} "
             f"resumed={s['resumed']} time={s['seconds']}s "
             f"tools={s['tool_calls']} "
-            f"tokens={s['tokens_in']}+{s['tokens_out']} "
+            f"tokens={tokens} "
             f"search={s['searches']} (denied {s['search_denied']}) "
             f"fetch={s['fetches']} budget_hits={s['budget_rounds']} "
             f"grounding_stripped={s['grounding_affected']}")

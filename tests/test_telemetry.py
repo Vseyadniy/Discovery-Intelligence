@@ -51,6 +51,25 @@ class TestTelemetrySummary(unittest.TestCase):
         self.assertIn("10✓/4✗ → 13✓/1✗", out)
         self.assertIn("unsourced×1", out)
 
+    def test_missing_historical_tokens_read_na_not_zero(self):
+        # pre-telemetry events carry no usage keys at all — the summary must
+        # say n/a, never claim zero token usage
+        rd = self._write([{"event": "api_company", "brand": "А", "seconds": 200,
+                           "tool_calls": 50}])
+        out = runs.telemetry_summary(rd)
+        self.assertIn("tokens=n/a (recorded before telemetry)", out)
+        self.assertNotIn("tokens=0+0", out)
+
+    def test_failure_event_error_has_urls_masked(self):
+        from src.api_runner import _err_for_event
+        e = RuntimeError("402 Client Error for url: https://api.search.brave.com"
+                         "/res/v1/web/search?q=секретный+запрос — quota")
+        s = _err_for_event(e)
+        self.assertNotIn("http", s)
+        self.assertNotIn("секретный", s)
+        self.assertIn("‹url›", s)
+        self.assertIn("RuntimeError", s)
+
     def test_no_events_file(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)

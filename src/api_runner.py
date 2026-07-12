@@ -112,6 +112,15 @@ def _save(path: Path, obj: dict) -> None:
     path.write_text(json.dumps(obj, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+def _err_for_event(ex: Exception) -> str:
+    """Failure text as persisted in events.jsonl: exception type + message with
+    any URLs masked (error strings can embed model-output snippets or request
+    URLs whose query part would leak search terms into telemetry). The full
+    text still goes to the console log for live debugging."""
+    import re as _re
+    return _re.sub(r"https?://\S+", "‹url›", f"{type(ex).__name__}: {ex}")[:300]
+
+
 # Collector-B gate codes are derived from the _A/_B files, which a record
 # repair never touches — routing them into the record-repair prompt loops
 # forever. They get a fresh Collector B pass + verifier re-merge instead.
@@ -353,7 +362,7 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
             except Exception as ex_err:                      # keep the batch alive
                 failed.append(f"{brand} ({type(ex_err).__name__}: {str(ex_err)[:120]})")
                 runs._event(run_dir, "api_company_failed", brand=brand,
-                            error=str(ex_err)[:300])
+                            error=_err_for_event(ex_err))
                 log(f"[api] {brand} FAILED after {int(time.time() - t0)}s — continuing")
         summary = f"researched {len(done)}/{len(todo)}: {', '.join(done) or '—'}"
         if failed:
@@ -476,7 +485,7 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
                 failed.append(f"{e['entity']} ({type(ex_err).__name__}: "
                               f"{str(ex_err)[:120]})")
                 runs._event(run_dir, "api_repair_failed", brand=e["entity"],
-                            error=str(ex_err)[:300])
+                            error=_err_for_event(ex_err))
                 log(f"[api] repair {e['entity']} FAILED — continuing with the "
                     f"next company")
         summary = f"repaired {len(fixed)}: {', '.join(fixed) or '—'} — re-gate via Next prompt"
