@@ -40,7 +40,7 @@ class TestFailureSpendRecorded(unittest.TestCase):
             (rd / "agent_runs").mkdir()
 
             def boom(*a, **k):
-                mr.LAST_SOURCE_LOG = _FakeLog()   # partial log published by loop
+                mr._set_source_log(_FakeLog())   # partial log published by loop
                 raise TimeoutError("stream stalled: read timed out")
 
             with patch.object(api_runner.runs, "_load_meta",

@@ -33,6 +33,7 @@ import json
 import os
 import re
 import shutil
+import threading
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -1348,9 +1349,12 @@ def _save_meta(run_dir: Path, meta: dict) -> None:
     (run_dir / "run.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
+_EVENT_LOCK = threading.Lock()   # concurrent company threads append safely
+
+
 def _event(run_dir: Path, event: str, **kw) -> None:
     line = json.dumps({"ts": _now(), "event": event, **kw}, ensure_ascii=False)
-    with (run_dir / "events.jsonl").open("a", encoding="utf-8") as fh:
+    with _EVENT_LOCK, (run_dir / "events.jsonl").open("a", encoding="utf-8") as fh:
         fh.write(line + "\n")
 
 

@@ -136,8 +136,8 @@ def _fail_stats() -> dict:
     """Spend of a FAILED pass (tokens/tool calls burned for nothing) — from the
     partial SourceLog the DeepSeek loop publishes up-front. Empty for providers
     without app-side tools and for failures before any model call."""
-    if mr.MODE == "deepseek" and mr.LAST_SOURCE_LOG is not None:
-        slog = mr.LAST_SOURCE_LOG
+    if mr.MODE == "deepseek" and mr.get_source_log() is not None:
+        slog = mr.get_source_log()
         return {"tool_calls": slog.tool_calls,
                 **{k: v for k, v in slog.stats.items() if v}}
     return {}
@@ -228,15 +228,15 @@ def _ground(obj: dict, log, label: str, only_fields=None) -> dict:
     the EXISTING gate rejects the field as 'unsourced' → existing repair loop.
     No-op (empty dict) for the other providers, whose server-side search makes
     fabricated URLs impossible by construction.
-    v1: reads the module-global mr.LAST_SOURCE_LOG — which is why deepseek
-    collectors run sequentially (see below). TODO: pass the SourceLog explicitly
-    per collector when parallelizing. Returns event kwargs (tool-call count +
+    Reads the THREAD-LOCAL SourceLog (mr.get_source_log) — companies may run
+    concurrently, each worker thread audits only its own passes; within a
+    company A→B stay sequential. Returns event kwargs (tool-call count +
     stripped/flagged tally); full URLs go to log()/events only, never into
     review_flags (year strings in URLs would interact with the gate's
     history-missing suppression keywords)."""
-    if mr.MODE != "deepseek" or mr.LAST_SOURCE_LOG is None:
+    if mr.MODE != "deepseek" or mr.get_source_log() is None:
         return {}
-    slog = mr.LAST_SOURCE_LOG
+    slog = mr.get_source_log()
     details = slog.check_grounding(obj, only_fields=only_fields)
     if details:
         log(f"[grounding] {label}: {len(details)} source(s) stripped/flagged")
@@ -292,7 +292,6 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
     if pending:
         import time
         from concurrent.futures import ThreadPoolExecutor
-        done, failed = [], []
         seg_by_brand = {}
         try:
             data = json.loads((run_dir / "companies.json").read_text(encoding="utf-8"))
@@ -302,7 +301,15 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
         except Exception:
             pass
         todo = pending[:batch]
-        for n, brand in enumerate(todo, 1):
+        # company-level concurrency (DeepSeek only): each company runs in its
+        # own worker thread; the thread-local SourceLog keeps grounding and
+        # failure-spend attribution correct per thread. Default 1 (sequential).
+        conc = mr.company_concurrency() if mr.MODE == "deepseek" else 1
+        conc_kw = {"concurrency": conc} if conc > 1 else {}
+
+        def _research_one(n, brand):
+            """Research ONE company end-to-end; isolated — returns
+            (status, brand, failure_desc, error_category)."""
             stem = runs._slug(brand)
             hint = str(seg_by_brand.get(brand, ""))[:200]
             t0 = time.time()
@@ -321,13 +328,10 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
                     log(f"[api] {brand} ({n}/{len(todo)}): resuming — collector "
                         f"{have} already saved, redoing only the rest")
                 if mr.MODE == "deepseek":
-                    # v1 safety measure: DeepSeek research uses the app's web
-                    # tools, whose SourceLog travels through the module-global
-                    # mr.LAST_SOURCE_LOG — running A and B in parallel would
-                    # race on it and ground each record against the other's
-                    # browsing. So deepseek runs A then B SEQUENTIALLY, each
-                    # grounded right after its own pass. TODO: pass a SourceLog
-                    # explicitly per collector, then re-join the parallel path.
+                    # DeepSeek runs A then B SEQUENTIALLY within a company: the
+                    # SourceLog is thread-local, so in THIS thread each
+                    # collector is grounded against its own browsing (other
+                    # companies may run concurrently in their own threads).
                     if a is None and b is None:
                         log(f"[api] {brand} ({n}/{len(todo)}): collectors A, then B "
                             f"(sequential on DeepSeek) — a research pass takes minutes…")
@@ -393,15 +397,50 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
                 _save(ar / f"{stem}_record.json", rec)
                 runs._event(run_dir, "api_company", brand=brand, engine=engine,
                             seconds=int(time.time() - t0),
-                            **({"resumed": have} if have else {}), **grd)
-                done.append(brand)
+                            **({"resumed": have} if have else {}),
+                            **conc_kw, **grd)
+                return ("done", brand, "", "")
             except Exception as ex_err:                      # keep the batch alive
-                failed.append(f"{brand} ({type(ex_err).__name__}: {str(ex_err)[:120]})")
+                cat = _error_category(ex_err)
                 runs._event(run_dir, "api_company_failed", brand=brand,
-                            error=_err_for_event(ex_err),
-                            category=_error_category(ex_err),
-                            seconds=int(time.time() - t0), **_fail_stats())
+                            error=_err_for_event(ex_err), category=cat,
+                            seconds=int(time.time() - t0),
+                            **conc_kw, **_fail_stats())
                 log(f"[api] {brand} FAILED after {int(time.time() - t0)}s — continuing")
+                return ("failed", brand,
+                        f"{brand} ({type(ex_err).__name__}: {str(ex_err)[:120]})", cat)
+
+        def _wave(items, workers):
+            if workers > 1 and len(items) > 1:
+                with ThreadPoolExecutor(max_workers=workers) as pool:
+                    return list(pool.map(lambda t: _research_one(*t), items))
+            return [_research_one(n, b) for n, b in items]
+
+        outcome: dict[str, tuple] = {}
+        results = _wave(list(enumerate(todo, 1)), conc)
+        for st, b, desc, _c in results:
+            outcome[b] = (st, desc)
+        # correlated transient failures (provider hiccup hits several threads
+        # at once) → jittered backoff, then retry ONLY those companies,
+        # sequentially — they resume from whatever collector files were saved
+        transient = [b for st, b, _d, c in results
+                     if st == "failed" and c in ("timeout", "stream", "provider")]
+        if len(transient) >= 2:
+            import random
+            delay = round(15 * (1 + random.random()), 1)   # 15–30s, jittered
+            runs._event(run_dir, "backoff", seconds=delay,
+                        companies=len(transient),
+                        reason="correlated transient failures",
+                        retry_concurrency=1)
+            log(f"[api] {len(transient)} correlated transient failures — backing "
+                f"off {delay}s, then retrying only those companies sequentially "
+                f"(they resume from saved collector files)")
+            time.sleep(delay)
+            for st, b, desc, _c in _wave(list(enumerate(transient, 1)), 1):
+                outcome[b] = (st, desc)
+        done = [b for b in todo if outcome.get(b, ("",))[0] == "done"]
+        failed = [outcome[b][1] for b in todo
+                  if outcome.get(b, ("",))[0] == "failed"]
         summary = f"researched {len(done)}/{len(todo)}: {', '.join(done) or '—'}"
         if failed:
             summary += f" · FAILED: {'; '.join(failed)} (press ⚡ again to retry)"

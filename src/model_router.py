@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 from pathlib import Path
 
 
@@ -60,9 +61,10 @@ def set_mode(m: str) -> None:
 
 def reset_source_log() -> None:
     """Called before each research/repair attempt so a failure is never
-    attributed to the PREVIOUS pass's SourceLog."""
+    attributed to the PREVIOUS pass's SourceLog (per thread)."""
     global LAST_SOURCE_LOG
     LAST_SOURCE_LOG = None
+    _TLS.source_log = None
 
 
 # ── research engine: GPT-5.5 (OpenAI Responses API + web_search) ──────────────
@@ -94,12 +96,32 @@ DEEPSEEK_API_KEY  = os.environ.get("DEEPSEEK_API_KEY", "")
 SEARCH_API_KEY  = os.environ.get("SEARCH_API_KEY", "")
 SEARCH_PROVIDER = os.environ.get("SEARCH_PROVIDER") or "brave"
 
-# Source log of the most recent DeepSeek tools run, read by api_runner for the
-# grounding check. NOTE — v1 safety measure: this is shared module-global state,
-# so api_runner runs DeepSeek collectors A/B SEQUENTIALLY (see run_next_step).
-# TODO: when parallelizing DeepSeek collectors, return/pass the SourceLog
-# explicitly per collector instead of through this global.
-LAST_SOURCE_LOG = None
+# Source log of the most recent DeepSeek tools run in THIS thread, read by
+# api_runner for grounding and failure-spend attribution. Thread-local, so
+# several companies can research concurrently — each worker thread sees only
+# its own passes. Within one company A→B stay sequential (same thread), so
+# each collector is grounded against its own browsing.
+_TLS = threading.local()
+LAST_SOURCE_LOG = None   # legacy alias (unsynchronized) — use get_source_log()
+
+
+def _set_source_log(log) -> None:
+    global LAST_SOURCE_LOG
+    LAST_SOURCE_LOG = log
+    _TLS.source_log = log
+
+
+def get_source_log():
+    return getattr(_TLS, "source_log", None)
+
+
+def company_concurrency() -> int:
+    """How many companies research simultaneously in DeepSeek mode
+    (DS_COMPANY_CONCURRENCY, default 1 — conservative; clamped to 1..4)."""
+    try:
+        return max(1, min(int(os.environ.get("DS_COMPANY_CONCURRENCY", "") or 1), 4))
+    except ValueError:
+        return 1
 
 # ── Claude engine ─────────────────────────────────────────────────────────────
 CLAUDE_MODEL     = os.environ.get("CLAUDE_MODEL", "claude-opus-4-8")       # claude mode: collectors + verify
@@ -318,9 +340,8 @@ def _run_deepseek_tools(system: str, user: str, max_tokens: int = 16000,
     require_search_key()   # fail fast — before any model tokens are spent
     ev = on_event or (lambda a, d: None)
     log = SourceLog()
-    global LAST_SOURCE_LOG
-    LAST_SOURCE_LOG = log   # published up-front: if this pass fails mid-way its
-    # spend (tokens/tool calls) must still be attributable in telemetry
+    _set_source_log(log)   # published up-front (thread-local): if this pass
+    # fails mid-way its spend must still be attributable in telemetry
     t_start = _time.time()
     quota_announced = False
     # idle timeout catches a stream that stops sending chunks (the «frozen at
@@ -598,12 +619,11 @@ def collect(system: str, user: str, max_tokens: int = 16000, on_event=None,
                          on_event=on_event), GROK_MODEL
     if MODE == "deepseek":
         # No server-side search on this API — research runs on the app's own
-        # web tools. v1: the SourceLog travels through the module global (see
-        # LAST_SOURCE_LOG note) — do not run two deepseek collects concurrently.
-        global LAST_SOURCE_LOG
+        # web tools. The SourceLog is thread-local (get_source_log), so
+        # concurrent company threads never see each other's browsing.
         text, log = _run_deepseek_tools(system, user, max_tokens, on_event,
                                         budget=budget, allow_extend=allow_extend)
-        LAST_SOURCE_LOG = log
+        _set_source_log(log)
         return text, f"{DEEPSEEK_MODEL}+tools"
     return _run_cheap(system, user, web=True, max_tokens=max_tokens,
                       on_event=on_event), CHEAP_MODEL
