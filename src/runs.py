@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import re
 import shutil
 from datetime import datetime, timezone
@@ -737,16 +738,23 @@ _TELEMETRY_SUMS = ("seconds", "tool_calls", "searches", "fetches",
                    "tokens_in", "tokens_out", "grounding_affected")
 
 
-def telemetry_summary(run_dir: Path) -> str:
-    """Aggregate the run's events.jsonl (the per-run append-only telemetry log)
-    into a per-stage picture: passes, failures, resumes, timing, token usage,
-    search/fetch activity, budget hits, grounding strips and gate trajectory."""
-    stages: dict[str, dict] = {}
-    gates, autofixed, salvaged = [], 0, 0
+# event keys that only exist since telemetry landed — their absence in older
+# events means «not recorded», never «zero»
+_SPLIT_KEYS = ("searches", "fetches", "search_denied", "budget_rounds", "requests")
+
+
+def _telemetry_data(run_dir: Path) -> dict | None:
+    """Deterministic aggregation of events.jsonl (no LLM): per-stage sums with
+    presence flags for the metrics historical events could not have recorded."""
     try:
         lines = (run_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
     except FileNotFoundError:
-        return "no events.jsonl yet — nothing recorded for this run"
+        return None
+    stages: dict[str, dict] = {}
+    gates, autofixed, salvaged = [], 0, 0
+    failed_brands: dict[str, set] = {}
+    passed_brands: dict[str, set] = {}
+    repair_brands: dict[str, int] = {}
     for line in lines:
         try:
             ev = json.loads(line)
@@ -763,44 +771,144 @@ def telemetry_summary(run_dir: Path) -> str:
         if not stage:
             continue
         s = stages.setdefault(stage, {"passes": 0, "failed": 0, "resumed": 0,
-                                      "_has_tokens": False,
+                                      "_has_tokens": False, "_has_seconds": False,
+                                      "_has_split": False,
                                       **{k: 0 for k in _TELEMETRY_SUMS}})
+        brand = ev.get("brand", "")
         if name.endswith("_failed"):
             s["failed"] += 1
+            failed_brands.setdefault(stage, set()).add(brand)
             continue
         s["passes"] += 1
+        passed_brands.setdefault(stage, set()).add(brand)
+        if name == "api_repair" and brand:
+            repair_brands[brand] = repair_brands.get(brand, 0) + 1
         if ev.get("resumed"):
             s["resumed"] += 1
         if "tokens_in" in ev or "tokens_out" in ev:
-            s["_has_tokens"] = True   # pre-telemetry events have NO usage data —
-        for k in _TELEMETRY_SUMS:     # absence must read n/a, not zero usage
+            s["_has_tokens"] = True
+        if "seconds" in ev:
+            s["_has_seconds"] = True
+        if any(k in ev for k in _SPLIT_KEYS):
+            s["_has_split"] = True
+        for k in _TELEMETRY_SUMS:
             v = ev.get(k)
             if isinstance(v, (int, float)):
                 s[k] += v
-    out = [f"telemetry — {run_dir.name}"]
+    return {"stages": stages, "gates": gates, "autofixed": autofixed,
+            "salvaged": salvaged, "failed_brands": failed_brands,
+            "passed_brands": passed_brands, "repair_brands": repair_brands}
+
+
+def telemetry_summary(run_dir: Path) -> str:
+    """Deterministic run summary (markdown) from events.jsonl — works for
+    partial and completed runs, paste-ready for later manual analysis.
+    Metrics that pre-telemetry events could not record read «n/a», never 0.
+    Cost appears only when TOKEN_PRICE_IN/TOKEN_PRICE_OUT (USD per 1M tokens)
+    are configured; source-yield only where the search/fetch split exists."""
+    d = _telemetry_data(run_dir)
+    if d is None:
+        return "no events.jsonl yet — nothing recorded for this run"
+    stages, gates = d["stages"], d["gates"]
+
+    # live run state — meaningful for partial runs (pending) and finished ones
+    out = [f"# Run summary — {run_dir.name}", ""]
+    try:
+        meta = _load_meta(run_dir)
+        brands, _n, _s = manifest(run_dir)
+        g = run_gate(run_dir, write_report=False)
+        pending = len(_pending_brands(run_dir, brands))
+        out += [f"market: {meta.get('market', '?')} · depth: {meta.get('depth', '?')} "
+                f"· status: {meta.get('status', '?')}",
+                f"cohort: {len(brands)} · accepted: {len(g['accepted'])} · "
+                f"rejected: {len(g['rejected'])} · pending research: {pending}", ""]
+    except Exception:
+        out += ["(run state unavailable — events only)", ""]
+
+    hdr = ("| stage | passes | failed | resumed | time | tool calls | "
+           "tokens in+out | searches | denied | fetches | budget hits | "
+           "grounding stripped |")
+    out += ["## Stages", hdr, "|" + "---|" * 12]
+    tot = {k: 0 for k in _TELEMETRY_SUMS}
+    tot_flags = {"tokens": False, "seconds": False, "split": False}
+    gap_notes = []
     for stage in ("discovery", "research", "repair", "b-rerun"):
         s = stages.get(stage)
         if not s:
             continue
-        tokens = (f"{s['tokens_in']}+{s['tokens_out']}" if s["_has_tokens"]
-                  else "n/a (recorded before telemetry)")
-        out.append(
-            f"  {stage:9} passes={s['passes']} failed={s['failed']} "
-            f"resumed={s['resumed']} time={s['seconds']}s "
-            f"tools={s['tool_calls']} "
-            f"tokens={tokens} "
-            f"search={s['searches']} (denied {s['search_denied']}) "
-            f"fetch={s['fetches']} budget_hits={s['budget_rounds']} "
-            f"grounding_stripped={s['grounding_affected']}")
-    if autofixed or salvaged:
-        out.append(f"  local     autofixed_fields={autofixed} salvaged_fields={salvaged}")
+        na = "n/a"
+        tokens = f"{s['tokens_in']}+{s['tokens_out']}" if s["_has_tokens"] else na
+        time_c = f"{s['seconds']}s" if s["_has_seconds"] else na
+        split = [str(s[k]) if s["_has_split"] else na
+                 for k in ("searches", "search_denied", "fetches", "budget_rounds")]
+        out.append(f"| {stage} | {s['passes']} | {s['failed']} | {s['resumed']} "
+                   f"| {time_c} | {s['tool_calls']} | {tokens} | {split[0]} "
+                   f"| {split[1]} | {split[2]} | {split[3]} "
+                   f"| {s['grounding_affected']} |")
+        for k in _TELEMETRY_SUMS:
+            tot[k] += s[k]
+        tot_flags["tokens"] |= s["_has_tokens"]
+        tot_flags["seconds"] |= s["_has_seconds"]
+        tot_flags["split"] |= s["_has_split"]
+        gaps = [g_ for g_, ok in (("tokens", s["_has_tokens"]),
+                                  ("timings", s["_has_seconds"]),
+                                  ("search/fetch split", s["_has_split"])) if not ok]
+        if gaps:
+            gap_notes.append(f"{stage}: {', '.join(gaps)}")
+    tokens_t = (f"{tot['tokens_in']}+{tot['tokens_out']}"
+                if tot_flags["tokens"] else "n/a")
+    out += ["", f"**Totals**: time {tot['seconds']}s"
+            + (" (partial — some stages unrecorded)" if not all(
+                s.get("_has_seconds") for s in stages.values()) else "")
+            + f" · tool calls {tot['tool_calls']} · tokens {tokens_t}"
+            + f" · failures {sum(s['failed'] for s in stages.values())}"
+            + f" · resumes {sum(s['resumed'] for s in stages.values())}"]
+
+    # cost — only with configured pricing AND recorded usage
+    try:
+        pin = float(os.environ.get("TOKEN_PRICE_IN", "") or 0)
+        pout = float(os.environ.get("TOKEN_PRICE_OUT", "") or 0)
+    except ValueError:
+        pin = pout = 0
+    if pin > 0 and pout > 0 and tot_flags["tokens"]:
+        cost = tot["tokens_in"] / 1e6 * pin + tot["tokens_out"] / 1e6 * pout
+        out.append(f"**Estimated cost** (recorded usage only, "
+                   f"${pin}/{pout} per 1M in/out): ${cost:.2f}")
+
+    # source yield — only derivable where the split was recorded
+    if tot_flags["split"] and tot["searches"]:
+        out.append(f"**Source yield** (split-recorded passes only): "
+                   f"{tot['fetches']} pages opened over {tot['searches']} searches "
+                   f"({tot['fetches'] / tot['searches']:.1f} per search) · "
+                   f"{tot['grounding_affected']} cited sources stripped by grounding")
+
+    # failures & retries
+    fb = d["failed_brands"].get("research", set())
+    if fb:
+        rec = fb & d["passed_brands"].get("research", set())
+        out += ["", f"**Research retries**: {len(fb)} companies failed at least "
+                f"once; {len(rec)} recovered on retry"
+                + (f"; still missing: {', '.join(sorted(fb - rec))}" if fb - rec else "")]
+    if d["repair_brands"]:
+        top = sorted(d["repair_brands"].items(), key=lambda kv: -kv[1])[:3]
+        out.append(f"**Repairs**: {sum(d['repair_brands'].values())} passes over "
+                   f"{len(d['repair_brands'])} companies (most: "
+                   + ", ".join(f"{b} ×{n}" for b, n in top) + ")")
+    if d["autofixed"] or d["salvaged"]:
+        out.append(f"**Local healing** (no API): autofixed fields "
+                   f"{d['autofixed']} · salvaged fields {d['salvaged']}")
+
     if gates:
-        traj = " → ".join(f"{g['accepted']}✓/{g['rejected']}✗" for g in gates[-6:])
-        out.append(f"  gate      {traj}")
+        out += ["", "## Gate",
+                "trajectory: " + " → ".join(
+                    f"{g_['accepted']}✓/{g_['rejected']}✗" for g_ in gates[-8:])]
         last_codes = gates[-1].get("codes")
         if last_codes:
-            out.append(f"  last rejects: "
-                       + ", ".join(f"{c}×{n}" for c, n in sorted(last_codes.items())))
+            out.append("last reject codes: " + ", ".join(
+                f"{c}×{n}" for c, n in sorted(last_codes.items())))
+    if gap_notes:
+        out += ["", "## Data gaps (recorded before telemetry — n/a, not zero)",
+                *[f"- {g_}" for g_ in gap_notes]]
     return "\n".join(out)
 
 
@@ -1200,7 +1308,11 @@ def main() -> None:
         for ent, flds in s.items():
             print(f"{ent}: restored {len(flds)} fields ({', '.join(flds[:6])}{'…' if len(flds) > 6 else ''})")
     elif args.cmd == "telemetry":
-        print(telemetry_summary(run_dir_for(args.run_id)))
+        rd = run_dir_for(args.run_id)
+        text = telemetry_summary(rd)
+        (rd / "run_summary.md").write_text(text + "\n", encoding="utf-8")
+        print(text)
+        print(f"\n[export] written to {rd / 'run_summary.md'} — paste-ready markdown")
     elif args.cmd == "list":
         for m in list_runs():
             print(f"{m['run_id']:50}  {m['status']:12}  {m['market']} [{m['depth']}]")
