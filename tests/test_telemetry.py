@@ -92,6 +92,27 @@ class TestTelemetrySummary(unittest.TestCase):
         self.assertIn("‹url›", s)
         self.assertIn("RuntimeError", s)
 
+    def test_diagnostics_prompt_offline_and_files_written(self):
+        rd = self._write(EVENTS)
+        (rd / "run.json").write_text(json.dumps(
+            {"run_id": "t", "market": "м", "depth": "superficial",
+             "model": "chatgpt", "output_language": "Russian", "status": "x"},
+            ensure_ascii=False), encoding="utf-8")
+        text = runs.diagnostics_prompt(rd)
+        self.assertIn("# Diagnose this market-research run", text)
+        self.assertIn("NEVER as zero", text)          # n/a rule stated for the analyst
+        self.assertIn("trajectory: 10✓/4✗ → 13✓/1✗", text)   # summary embedded
+        self.assertEqual(text, (rd / "diagnostics_prompt.md").read_text(encoding="utf-8"))
+        self.assertTrue((rd / "run_summary.md").exists())     # refreshed alongside
+
+    def test_diagnostics_prompt_works_on_empty_run(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        rd = Path(tmp.name)
+        text = runs.diagnostics_prompt(rd)            # no events.jsonl yet
+        self.assertIn("nothing recorded", text)
+        self.assertTrue((rd / "diagnostics_prompt.md").exists())
+
     def test_no_events_file(self):
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)

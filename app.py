@@ -161,7 +161,11 @@ class App:
             row=5, column=0, columnspan=3, sticky="we", pady=8)
 
         self.step_hdr = ttk.Label(frm, text="2 · Current step", font=("", 13, "bold"))
-        self.step_hdr.grid(row=6, column=0, columnspan=3, sticky="w", **pad)
+        self.step_hdr.grid(row=6, column=0, columnspan=2, sticky="w", **pad)
+        # diagnostics is mode-independent and NEVER advances the run: it only
+        # refreshes run_summary.md and builds a paste-into-ChatGPT prompt
+        ttk.Button(frm, text="🩺 Diagnostics", command=self.on_diagnostics).grid(
+            row=6, column=2, sticky="e", **pad)
         self.prompt_txt = tk.Text(frm, height=10, width=96, wrap="word")
         self.prompt_txt.grid(row=7, column=0, columnspan=3, sticky="we", **pad)
         self.prompt_txt.configure(state="disabled")
@@ -352,6 +356,25 @@ class App:
         dest = runs.docs_dir_for(self.run_dir)
         dest.mkdir(parents=True, exist_ok=True)
         open_path(dest)
+
+    def on_diagnostics(self):
+        """Manual diagnostics: refresh the telemetry summary, show + copy the
+        ready-to-paste ChatGPT prompt, reveal the run folder. Independent of
+        the research state machine — nothing is advanced, nothing is sent."""
+        if not self.run_dir:
+            self.status.set("Diagnostics needs a run — create one or «Load past run…» first.")
+            return
+        try:
+            text = runs.diagnostics_prompt(self.run_dir)
+        except Exception as e:
+            self.status.set(f"Diagnostics failed: {e}")
+            return
+        self._show_prompt(text)
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        open_path(self.run_dir)     # run_summary.md · diagnostics_prompt.md · events.jsonl
+        self.status.set("🩺 Diagnostics prompt copied — paste it into ChatGPT. Run folder "
+                        "opened (run_summary.md · diagnostics_prompt.md · events.jsonl).")
 
     def on_build(self):
         if not self.run_dir:

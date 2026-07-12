@@ -912,6 +912,40 @@ def telemetry_summary(run_dir: Path) -> str:
     return "\n".join(out)
 
 
+def diagnostics_prompt(run_dir: Path) -> str:
+    """Manual diagnostics workflow: refresh run_summary.md and build a concise
+    ready-to-paste ChatGPT analysis prompt around it. Fully deterministic and
+    offline — nothing is called or sent anywhere; the user pastes it themselves.
+    Works for partial and completed runs (the summary reflects live state)."""
+    summary = telemetry_summary(run_dir)
+    (run_dir / "run_summary.md").write_text(summary + "\n", encoding="utf-8")
+    prompt = f"""# Diagnose this market-research run
+
+Below is the telemetry summary of one automated market-research run (multi-agent
+pipeline: discovery → per-company collectors A/B → verifier merge → validation
+gate → repair loop). Analyze it and answer:
+
+1. **Run health** — failures, retries, repair concentration (livelock suspects),
+   tool-budget hits, stream/timeout problems. What went wrong and where?
+2. **Efficiency** — time and token/tool-call spend per stage and per accepted
+   record; where is the waste?
+3. **Data quality** — gate trajectory, reject codes, grounding strips, unresolved
+   (blanked) fields. How trustworthy is the deliverable?
+4. **Top 3–5 concrete improvements** for the next run (batch size, provider,
+   search quota, repair strategy), each justified by a number from the data.
+
+Rules: metrics marked «n/a» were not recorded (older run) — treat them as
+unknown, NEVER as zero. Do not invent numbers absent from the data. If you need
+per-event detail, ask me to paste events.jsonl (same folder).
+
+---
+
+{summary}
+"""
+    (run_dir / "diagnostics_prompt.md").write_text(prompt, encoding="utf-8")
+    return prompt
+
+
 def eta_seconds(run_dir: Path, pending: int, rejected: int) -> int | None:
     """Rough time-to-finish from this run's recorded API timings (None when
     nothing is left). Falls back to ~5 min per company before the first
