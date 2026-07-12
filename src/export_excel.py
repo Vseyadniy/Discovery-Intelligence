@@ -236,6 +236,19 @@ def _record_to_row(rec: dict, cols: list[str] | None = None) -> dict:
 
     row["financial_sources"] = _uniq(fin_sources)
     row["other_sources"] = _uniq(other_sources)
+
+    # `unresolved: <field> — …` review_flags mark cells the pipeline could not
+    # source (e.g. search quota exhausted): the cell stays EMPTY and gets a
+    # yellow highlight in write_xlsx — never marker text in the data itself
+    unresolved = []
+    for fl in rec.get("review_flags") or []:
+        s = str(fl)
+        if s.lower().startswith("unresolved:"):
+            fname = s.split(":", 1)[1].split("—")[0].strip()
+            col = field_to_col.get(fname)
+            if col:
+                unresolved.append(col)
+    row["_unresolved"] = unresolved   # meta key: not a column, csv ignores it
     return row
 
 
@@ -283,6 +296,7 @@ def write_xlsx(headers: list[str], rows: list[dict], out: Path) -> None:
     header_fill = PatternFill("solid", fgColor="1F4E78")
     header_font = Font(bold=True, color="FFFFFF")
     low_fill = PatternFill("solid", fgColor="FCE4D6")   # low-confidence highlight
+    unresolved_fill = PatternFill("solid", fgColor="FFF599")   # yellow: needs a new source
     wrap_top = Alignment(wrap_text=True, vertical="top")
 
     ws.append(headers)
@@ -293,6 +307,7 @@ def write_xlsx(headers: list[str], rows: list[dict], out: Path) -> None:
         ws.column_dimensions[get_column_letter(ci)].width = _WIDTHS.get(name, 22)
 
     conf_cols = [h for h in headers if "confidence" in h.lower()]
+    hidx = {h: i + 1 for i, h in enumerate(headers)}
     for r in rows:
         values = [r.get(h, "") for h in headers]
         ws.append(values)
@@ -303,6 +318,9 @@ def write_xlsx(headers: list[str], rows: list[dict], out: Path) -> None:
             cell.alignment = wrap_top
             if low:
                 cell.fill = low_fill
+        for col in r.get("_unresolved", []):
+            if col in hidx:
+                ws.cell(row=ri, column=hidx[col]).fill = unresolved_fill
 
     # Two-level drill-down on the financial block: outline level 1 = the whole
     # block (product_revenue_source is its level-1 summary column), level 2 =

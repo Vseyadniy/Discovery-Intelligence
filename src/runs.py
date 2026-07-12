@@ -474,6 +474,123 @@ def run_gate(run_dir: Path, write_report: bool = True) -> dict:
     return g
 
 
+def _norm_label(s) -> str:
+    """Comparable segment label: lowercase, ё→е, hyphen/underscore→space,
+    punctuation stripped (+ kept for labels like «CRM+BPMS»), spaces collapsed."""
+    s = str(s or "").lower().replace("ё", "е")
+    s = re.sub(r"[-_/]+", " ", s)
+    s = re.sub(r"[^\w\s+]", " ", s, flags=re.UNICODE)
+    return re.sub(r"\s+", " ", s).strip()
+
+
+def autofix_records(run_dir: Path) -> dict:
+    """Deterministic, web-free repair of mechanical gate failures — applied to
+    gate-REJECTED records only (accepted records are never touched). Handles:
+    segment near-misses vs the taxonomy («Low-code BPM-платформы» → «Low-code
+    BPM платформы»), unmapped entity_type labels, several ИНН in one field,
+    YoY fields computable from their sourced year pair, and money values whose
+    numeric head parses but a prose tail breaks the «N млн ₽» format. Only
+    failures that genuinely need new evidence are left for the repair loop."""
+    _brands, _note, segments = manifest(run_dir)
+    g = run_gate(run_dir, write_report=False)
+    seg_by_norm: dict[str, str] = {}
+    for s in segments or []:
+        seg_by_norm.setdefault(_norm_label(s), s)
+    fixed: dict[str, list[str]] = {}
+    for e in g["rejected"]:
+        rec = e["record"]
+        fields = rec.get("fields") or {}
+        codes = {(i["field"], i["code"]) for i in e["issues"]
+                 if i["severity"] == "reject"}
+        notes: list[str] = []
+
+        def val(name):
+            f = fields.get(name)
+            return f.get("value") if isinstance(f, dict) else f
+
+        # segment → snap to the taxonomy label it obviously means
+        if any(c in ("segment-taxonomy", "segment-long") for _f, c in codes) and seg_by_norm:
+            f = fields.get("segment")
+            if isinstance(f, dict):
+                n = _norm_label(f.get("value"))
+                target = seg_by_norm.get(n)
+                if target is None and n:
+                    cands = {s for k, s in seg_by_norm.items() if n in k or k in n}
+                    if len(cands) == 1:
+                        target = cands.pop()
+                if target and str(f.get("value")) != target:
+                    notes.append(f"segment: «{f.get('value')}» → «{target}»")
+                    f["value"] = target
+
+        # entity_type → canonical taxonomy label when the map knows it
+        em = rec.get("entity_match") or {}
+        raw_et = em.get("entity_type") or em.get("type") or val("entity_type")
+        canon = gate.normalize_entity_type(raw_et)
+        if raw_et and canon and str(raw_et) != canon:
+            em["entity_type"] = canon
+            rec["entity_match"] = em
+            if isinstance(fields.get("entity_type"), dict):
+                fields["entity_type"]["value"] = canon
+            notes.append(f"entity_type: «{raw_et}» → «{canon}»")
+
+        # several ИНН in one field → keep the first checksum-valid one
+        if ("inn", "inn-invalid") in codes:
+            f = fields.get("inn")
+            if isinstance(f, dict):
+                digits = re.findall(r"\d{10}|\d{12}", str(f.get("value") or ""))
+                valid = [d for d in digits if gate.inn_problem(d) is None]
+                if len(digits) > 1 and valid:
+                    notes.append(f"inn: kept {valid[0]} of «{f.get('value')}»")
+                    rec.setdefault("review_flags", []).append(
+                        f"inn: несколько ИНН в поле, взят первый валидный — "
+                        f"исходно «{f.get('value')}»")
+                    f["value"] = valid[0]
+
+        # YoY fields computable from their sourced year pair
+        def _mln(name):
+            m = gate.normalize_money(val(name) or "")
+            if m:
+                digits2 = re.sub(r"[^\d-]", "", m.split("млн")[0])
+                try:
+                    return float(digits2)
+                except ValueError:
+                    return None
+            return None
+
+        for yoy, (i1, i2) in gate._COMPUTED_INPUTS.items():
+            if not yoy.endswith("_yoy_24_25") or val(yoy) is not None:
+                continue
+            v1, v2 = _mln(i1), _mln(i2)
+            if v1 and v2 is not None and v1 != 0:
+                pct = round((v2 - v1) / abs(v1) * 100)
+                fields[yoy] = {"value": f"{pct}%", "source": ""}
+                notes.append(f"{yoy}: computed {pct}% from {i1}/{i2}")
+
+        # money value whose numeric head parses but a prose tail breaks it
+        for name in gate.MONEY_FIELDS:
+            f = fields.get(name)
+            if not isinstance(f, dict) or not f.get("value"):
+                continue
+            v = str(f["value"])
+            if gate.normalize_money(v):
+                continue
+            m = re.match(r"^(.*?₽)", v)
+            canon_v = gate.normalize_money(m.group(1)) if m else None
+            if canon_v and v != canon_v:
+                rec.setdefault("review_flags", []).append(f"{name}: исходно «{v}»")
+                f["value"] = canon_v
+                notes.append(f"{name}: «{v[:40]}…» → «{canon_v}»")
+
+        if notes:
+            Path(e["path"]).write_text(
+                json.dumps(rec, ensure_ascii=False, indent=2), encoding="utf-8")
+            fixed[e["entity"]] = notes
+    if fixed:
+        _event(run_dir, "autofixed", companies=len(fixed),
+               fields=sum(len(v) for v in fixed.values()))
+    return fixed
+
+
 def salvage_records(run_dir: Path) -> dict:
     """Deterministic merge repair: copy into each record any schema field it is
     missing but its own _A.json/_B.json holds (a sourced value the verifier —
@@ -499,10 +616,13 @@ def salvage_records(run_dir: Path) -> dict:
         if not colls:
             continue
         fields = rec.setdefault("fields", {})
+        flags_text = " ".join(str(x) for x in (rec.get("review_flags") or [])).lower()
         copied = []
         for name in schema_fields:
             if gate.value_of(fields.get(name)) is not None:
                 continue
+            if f"unresolved: {name}".lower() in flags_text:
+                continue   # deliberately blanked — do not resurrect from A/B
             hits = {tag: cf[name] for tag, cf in colls.items()
                     if gate.value_of(cf.get(name)) is not None
                     and not gate.is_placeholder(gate.value_of(cf.get(name)))}
@@ -537,6 +657,7 @@ def next_prompt(run_dir: Path, batch: int = 3) -> tuple[str, str]:
         kind, text = "discovery", build_discovery_prompt(meta, depth)
     else:
         salvage_records(run_dir)      # heal mechanical merge-loss before gating
+        autofix_records(run_dir)      # deterministic fixes need no repair pass
         pending = _pending_brands(run_dir, brands)
         if pending:
             done_n = len(brands) - len(pending)
@@ -641,6 +762,7 @@ def deliverable_name(meta: dict) -> str:
 def build_excel(run_dir: Path) -> Path:
     """Build the deliverable from gate-ACCEPTED records only."""
     salvage_records(run_dir)
+    autofix_records(run_dir)
     g = run_gate(run_dir)
     if not g["accepted"]:
         raise SystemExit(

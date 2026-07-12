@@ -106,6 +106,49 @@ class TestRepairRouting(unittest.TestCase):
         self.assertEqual(calls["collect"], ["B-PROMPT"])       # b-copy gets its own reruns
 
 
+class TestRecordRepairCap(unittest.TestCase):
+    """3 exhausted repair attempts → no more API calls; evidence fields are
+    blanked + flagged `unresolved:` so the record can pass and export."""
+
+    def test_cap_blanks_instead_of_burning_calls(self):
+        with tempfile.TemporaryDirectory() as td:
+            rd = Path(td)
+            (rd / "agent_runs").mkdir()
+            rec_path = rd / "agent_runs" / "эльба_record.json"
+            record = {"entity": BRAND,
+                      "fields": {"headcount": {"value": "120", "source": ""}}}
+            rec_path.write_text(json.dumps(record, ensure_ascii=False),
+                                encoding="utf-8")
+            for stem in ("эльба_A", "эльба_B"):
+                (rd / "agent_runs" / f"{stem}.json").write_text(
+                    '{"fields": {}}', encoding="utf-8")
+            issues = [{"field": "headcount", "code": "unsourced",
+                       "severity": "reject"}]
+            sig = "headcount:unsourced"
+            for _ in range(3):
+                runs._event(rd, "api_repair", brand=BRAND, sig=sig)
+            entry = {"entity": BRAND, "stem": "эльба", "path": rec_path,
+                     "issues": issues, "record": record, "verdict": "rejected"}
+            calls = []
+            with patch.object(api_runner.runs, "_load_meta",
+                              return_value={"market": "m", "output_language": "Russian"}), \
+                 patch.object(api_runner.runs, "manifest", return_value=([BRAND], "", [])), \
+                 patch.object(api_runner.runs, "load_schema", return_value={}), \
+                 patch.object(api_runner, "load_config", return_value=({}, {}, [])), \
+                 patch.object(api_runner.runs, "_pending_brands", return_value=[]), \
+                 patch.object(api_runner.runs, "salvage_records"), \
+                 patch.object(api_runner.runs, "autofix_records", return_value={}), \
+                 patch.object(api_runner.runs, "run_gate",
+                              return_value={"rejected": [entry], "accepted": []}), \
+                 patch.object(mr, "collect", side_effect=lambda *a, **k: calls.append(1)):
+                summary = api_runner.run_next_step(rd, batch=3, log=lambda *_: None)
+            self.assertEqual(calls, [])                    # zero API spend
+            saved = json.loads(rec_path.read_text())
+            self.assertEqual(saved["fields"]["headcount"]["value"], "")
+            self.assertTrue(saved["review_flags"][0].startswith("unresolved: headcount"))
+            self.assertIn("unresolved fields blanked", summary)
+
+
 class TestPromptModeRouting(unittest.TestCase):
     """runs.next_prompt must issue a «Redo Collector B» prompt for B_CODES
     rejects and the normal repair prompt for record-level rejects."""

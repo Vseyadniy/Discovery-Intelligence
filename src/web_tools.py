@@ -36,6 +36,21 @@ MAX_PAGE_CHARS = 10_000
 
 
 # ── search (provider-pluggable) ───────────────────────────────────────────────
+class SearchQuotaExhausted(RuntimeError):
+    """The search API refused for billing/quota reasons (Brave → HTTP 402)."""
+
+
+# Sticky per-process flag: once the quota is gone every further web_search call
+# fails instantly (no HTTP, no retries) — the run degrades explicitly instead
+# of burning model tokens on doomed searches. apply_env() resets it (new key).
+QUOTA_EXHAUSTED = False
+
+
+def reset_quota_flag() -> None:
+    global QUOTA_EXHAUSTED
+    QUOTA_EXHAUSTED = False
+
+
 def require_search_key() -> str:
     """The search key, or a clear error. Called upfront by the DeepSeek tools
     loop (fail fast, before any model tokens are spent) and by the backends."""
@@ -57,6 +72,13 @@ def _search_brave(query: str, count: int) -> list[dict]:
                      headers={"X-Subscription-Token": key,
                               "Accept": "application/json", "User-Agent": _UA},
                      timeout=20)
+    if r.status_code in (402, 429):
+        global QUOTA_EXHAUSTED
+        QUOTA_EXHAUSTED = True
+        raise SearchQuotaExhausted(
+            f"Brave search quota exhausted (HTTP {r.status_code}) — upgrade the "
+            f"plan at https://api-dashboard.search.brave.com or wait for the "
+            f"monthly reset")
     r.raise_for_status()
     items = ((r.json().get("web") or {}).get("results") or [])[:count]
     return [{"title": i.get("title", ""), "url": i.get("url", ""),
@@ -69,6 +91,10 @@ _SEARCH_PROVIDERS = {"brave": _search_brave}
 
 def web_search(query: str, count: int = 8) -> list[dict]:
     """Search the web → [{title, url, snippet}]. Backend per SEARCH_PROVIDER."""
+    if QUOTA_EXHAUSTED:
+        raise SearchQuotaExhausted(
+            "search quota exhausted — no new searches until the plan is "
+            "upgraded or the quota resets")
     provider = (os.environ.get("SEARCH_PROVIDER") or "brave").strip().lower()
     fn = _SEARCH_PROVIDERS.get(provider)
     if fn is None:

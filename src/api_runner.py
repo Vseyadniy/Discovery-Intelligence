@@ -25,6 +25,7 @@ from pathlib import Path
 from . import gate
 from . import model_router as mr
 from . import runs
+from . import web_tools
 from .orchestrator import (PROMPTS, fill, format_corrections, format_fields,
                            format_sources, load_config)
 
@@ -37,7 +38,12 @@ _SYS_QUAL = ("You are a qualitative research designer on a market-intelligence "
              "the material in the prompt. Return STRICT JSON only — no prose.")
 
 _ACTION_LABEL = {"searching": "🔎 searching", "reading": "📄 reading",
-                 "writing": "🧠 analyzing & writing", "thinking": "⏳ thinking"}
+                 "writing": "🧠 analyzing & writing", "thinking": "⏳ thinking",
+                 "quota": "⚠️ Search API quota exhausted — continuing without "
+                          "new search and highlighting unresolved fields"}
+
+_QUOTA_SUMMARY = (" · ⚠️ Search API quota exhausted — continuing without new "
+                  "search; unresolved fields stay blank (yellow in Excel)")
 
 
 def _ev(log, prefix: str):
@@ -72,6 +78,7 @@ def apply_env(values: dict[str, str]) -> None:
     mr.DEEPSEEK_MODEL = os.environ.get("DEEPSEEK_MODEL", mr.DEEPSEEK_MODEL)
     mr.SEARCH_API_KEY = os.environ.get("SEARCH_API_KEY", mr.SEARCH_API_KEY)
     mr.SEARCH_PROVIDER = os.environ.get("SEARCH_PROVIDER") or mr.SEARCH_PROVIDER
+    web_tools.reset_quota_flag()   # a new/upgraded search key gets a fresh start
     mr._cheap_client = None      # force re-construction with the new keys
     mr._claude_client = None
     mr._grok_client = None
@@ -110,6 +117,54 @@ def _save(path: Path, obj: dict) -> None:
 # forever. They get a fresh Collector B pass + verifier re-merge instead.
 _B_CODES = gate.B_CODES
 _B_RERUN_LIMIT = 2   # same code still failing after this many fresh B passes → manual review
+
+_REPAIR_LIMIT = 3    # record-level repair attempts per company before giving up
+# Codes whose only fix is NEW evidence — when repairs are exhausted (or search
+# is unavailable) these fields are blanked + flagged instead of looping forever
+_EVIDENCE_CODES = {"unsourced", "bad-source", "search-url",
+                   "insignificant-news", "history-missing"}
+
+
+def _repair_sigs(run_dir: Path, brand: str) -> list[str]:
+    """Failure signatures of this brand's past record repairs (events.jsonl)."""
+    out = []
+    try:
+        for line in (run_dir / "events.jsonl").read_text(encoding="utf-8").splitlines():
+            ev = json.loads(line)
+            if ev.get("event") == "api_repair" and ev.get("brand") == brand:
+                out.append(str(ev.get("sig", "")))
+    except Exception:
+        pass
+    return out
+
+
+def _blank_unresolved(rec: dict, issues: list[dict], reason: str) -> list[str]:
+    """Blank non-required evidence fields that repairs could not source, with an
+    `unresolved:` review_flags note per field (the Excel export paints those
+    cells yellow; the cells themselves stay EMPTY — never marker text)."""
+    fields = rec.get("fields") or {}
+    blanked = []
+
+    def blank(name):
+        f = fields.get(name)
+        if name in gate.REQUIRED_FIELDS or not isinstance(f, dict):
+            return
+        if f.get("value") in (None, ""):
+            return
+        f["value"] = ""
+        f["source"] = ""
+        rec.setdefault("review_flags", []).append(f"unresolved: {name} — {reason}")
+        blanked.append(name)
+
+    for i in issues:
+        if i["code"] in _EVIDENCE_CODES:
+            blank(i["field"])
+        elif i["code"] == "product-source-missing":
+            # figures whose method could not be stated are unverifiable
+            # estimates — blank the remaining product-revenue values themselves
+            for name in gate._PRODUCT_REV_FIELDS:
+                blank(name)
+    return blanked
 
 
 def _b_reruns(run_dir: Path, brand: str, codes: set[str]) -> int:
@@ -296,17 +351,47 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
         summary = f"researched {len(done)}/{len(todo)}: {', '.join(done) or '—'}"
         if failed:
             summary += f" · FAILED: {'; '.join(failed)} (press ⚡ again to retry)"
+        if web_tools.QUOTA_EXHAUSTED:
+            summary += _QUOTA_SUMMARY
         return summary
 
-    # step 3 — repair rejected records
+    # step 3 — repair rejected records (after deterministic web-free healing)
     runs.salvage_records(run_dir)
+    fixes = runs.autofix_records(run_dir)
+    if fixes:
+        log(f"[autofix] {len(fixes)} record(s) healed without web research: "
+            + "; ".join(f"{k} ({len(v)})" for k, v in fixes.items()))
     g = runs.run_gate(run_dir)
     if g["rejected"]:
-        fixed, manual = [], []
+        fixed, manual, failed = [], [], []
         for e in g["rejected"][:batch]:
             issues = [i for i in e["issues"] if i["severity"] == "reject"]
             a = gate._load(ar / f"{e['stem']}_A.json") or {}
             b = gate._load(ar / f"{e['stem']}_B.json") or {}
+
+            # livelock guard: stop when attempts run out OR the last two
+            # repairs left the exact same failures — then blank the evidence
+            # fields we cannot source and flag them `unresolved:` instead of
+            # burning more tool calls on the same wall
+            sig = ",".join(sorted(f"{i['field']}:{i['code']}" for i in issues))
+            sigs = _repair_sigs(run_dir, e["entity"])
+            if len(sigs) >= _REPAIR_LIMIT or sigs[-2:] == [sig, sig]:
+                blanked = _blank_unresolved(
+                    e["record"], issues,
+                    "не подтверждено после повторных repair-проходов"
+                    + (" (поисковая квота исчерпана)" if web_tools.QUOTA_EXHAUSTED else ""))
+                if blanked:
+                    _save(e["path"], e["record"])
+                    log(f"[api] {e['entity']}: {len(sigs)} repairs made no "
+                        f"progress — blanked {len(blanked)} unsourced field(s) "
+                        f"({', '.join(blanked)}), flagged for review")
+                    fixed.append(f"{e['entity']} (unresolved fields blanked)")
+                else:
+                    msg = (f"{e['entity']}: {len(sigs)} repairs made no progress "
+                           f"on [{sig}] — manual review needed")
+                    log(f"[api] STOP · {msg}")
+                    manual.append(msg)
+                continue
 
             # Collector-B failures → fresh B pass + verifier re-merge (a record
             # repair cannot clear them: the gate re-reads the _B.json file)
@@ -358,22 +443,33 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
                 + f" Prose in {meta['output_language']}; money as «N млн ₽»."
                 + (f" Allowed segments: {', '.join(segments)}." if segments else ""))
             log(f"[api] repair {e['entity']} ({len(issues)} issues)…")
-            raw, engine = mr.collect(_SYS, prompt,
-                                     on_event=_ev(log, f"🔧 Repair · {e['entity']}"))
-            rec = mr.extract_json(raw)
-            # repair audits ONLY the fields the model was asked to fix — the
-            # rest keep sources grounded in their original research pass
-            grd = _ground(rec, log, f"Repair · {e['entity']}",
-                          only_fields={i["field"] for i in issues})
-            rec["entity"] = e["entity"]
-            _save(e["path"], rec)
-            if grd:   # deepseek only — other providers' events stay unchanged
+            try:                                 # one hung/failed repair must
+                raw, engine = mr.collect(        # not block the rest of the batch
+                    _SYS, prompt, on_event=_ev(log, f"🔧 Repair · {e['entity']}"))
+                rec = mr.extract_json(raw)
+                # repair audits ONLY the fields the model was asked to fix — the
+                # rest keep sources grounded in their original research pass
+                grd = _ground(rec, log, f"Repair · {e['entity']}",
+                              only_fields={i["field"] for i in issues})
+                rec["entity"] = e["entity"]
+                _save(e["path"], rec)
                 runs._event(run_dir, "api_repair", brand=e["entity"],
-                            engine=engine, **grd)
-            fixed.append(e["entity"])
+                            engine=engine, sig=sig, **grd)
+                fixed.append(e["entity"])
+            except Exception as ex_err:
+                failed.append(f"{e['entity']} ({type(ex_err).__name__}: "
+                              f"{str(ex_err)[:120]})")
+                runs._event(run_dir, "api_repair_failed", brand=e["entity"],
+                            error=str(ex_err)[:300])
+                log(f"[api] repair {e['entity']} FAILED — continuing with the "
+                    f"next company")
         summary = f"repaired {len(fixed)}: {', '.join(fixed) or '—'} — re-gate via Next prompt"
+        if failed:
+            summary += f" · FAILED: {'; '.join(failed)} (press ⚡ again to retry)"
         if manual:
             summary += f" · MANUAL REVIEW: {'; '.join(manual)}"
+        if web_tools.QUOTA_EXHAUSTED:
+            summary += _QUOTA_SUMMARY
         return summary
 
     return f"all {len(g['accepted'])} records accepted — build the Excel"

@@ -256,6 +256,13 @@ _DS_TOOLS_ADDENDUM = (
 
 _DS_MAX_TOOL_CALLS = 25   # hard cap, then the model is forced to answer
 _DS_KEEP_FETCHES = 8      # newest fetched pages kept verbatim in the ~64k context
+_DS_IDLE_TIMEOUT = 180.0  # max silence between stream chunks before we give up
+_DS_PASS_DEADLINE = 1500  # max seconds for one whole tools pass (25 min)
+
+_QUOTA_NOTE = ("search quota exhausted — no new searches available. Work with "
+               "the pages already fetched and URLs you already know (fetch_url "
+               "still works). Leave fields you cannot confirm blank and add a "
+               "review_flags note instead of guessing.")
 
 
 def _run_deepseek_tools(system: str, user: str, max_tokens: int = 16000,
@@ -265,10 +272,22 @@ def _run_deepseek_tools(system: str, user: str, max_tokens: int = 16000,
     every URL the model saw, for the grounding check in api_runner.
     Each iteration is one short non-streaming call (the long-run streaming
     concern doesn't apply: browsing happens between calls, in the app)."""
-    from .web_tools import SourceLog, fetch_url, require_search_key, web_search
+    import time as _time
+
+    import httpx
+
+    from . import web_tools
+    from .web_tools import (SearchQuotaExhausted, SourceLog, fetch_url,
+                            require_search_key, web_search)
     require_search_key()   # fail fast — before any model tokens are spent
     ev = on_event or (lambda a, d: None)
     log = SourceLog()
+    t_start = _time.time()
+    quota_announced = False
+    # idle timeout catches a stream that stops sending chunks (the «frozen at
+    # analyzing & writing» failure); the pass deadline bounds the whole loop
+    req_timeout = httpx.Timeout(connect=30.0, read=_DS_IDLE_TIMEOUT,
+                                write=60.0, pool=30.0)
     messages = [{"role": "system", "content": system + _DS_TOOLS_ADDENDUM},
                 {"role": "user", "content": user}]
     fetch_idxs: list[int] = []   # indices of fetch_url tool results, for trimming
@@ -286,9 +305,14 @@ def _run_deepseek_tools(system: str, user: str, max_tokens: int = 16000,
         # STREAMED like every other engine here: a non-streaming call sits
         # silent for the whole generation (the final JSON can take minutes),
         # freezing the app's status line and risking idle-connection stalls.
+        if _time.time() - t_start > _DS_PASS_DEADLINE:
+            raise RuntimeError(
+                f"{DEEPSEEK_MODEL} pass exceeded {_DS_PASS_DEADLINE // 60} min "
+                f"after {calls} tool call(s) — retry (it resumes from saved "
+                f"files), or pick another provider for this step")
         kwargs = dict(model=DEEPSEEK_MODEL, max_tokens=max_tokens,
                       messages=messages, tools=_DS_TOOLS, tool_choice="auto",
-                      stream=True)
+                      stream=True, timeout=req_timeout)
         ev("thinking", "")   # liveness between tool batches: the status line
         content_parts: list[str] = []   # must move even while the model decides
         acc: dict[int, dict] = {}          # tool-call deltas keyed by index
@@ -343,11 +367,30 @@ def _run_deepseek_tools(system: str, user: str, max_tokens: int = 16000,
                 name = t["name"]
                 if name == "web_search":
                     q = str(args.get("query", ""))
+                    if web_tools.QUOTA_EXHAUSTED:
+                        # deny instantly — no HTTP, no status churn, and tell
+                        # the model once how to proceed without search. Denials
+                        # still consume the budget so the loop stays bounded.
+                        calls += 1
+                        if not quota_announced:
+                            quota_announced = True
+                            ev("quota", "")
+                        payload = json.dumps({"error": _QUOTA_NOTE},
+                                             ensure_ascii=False)
+                        messages.append({"role": "tool", "tool_call_id": t["id"],
+                                         "content": payload})
+                        continue
                     ev("searching", q)
                     try:
                         results = web_search(q, int(args.get("count") or 8))
                         log.log_search(results)
                         payload = json.dumps(results, ensure_ascii=False)
+                    except SearchQuotaExhausted:
+                        if not quota_announced:
+                            quota_announced = True
+                            ev("quota", "")
+                        payload = json.dumps({"error": _QUOTA_NOTE},
+                                             ensure_ascii=False)
                     except Exception as ex:
                         payload = json.dumps(
                             {"error": f"{type(ex).__name__}: {ex}"},

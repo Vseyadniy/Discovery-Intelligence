@@ -67,6 +67,9 @@ _ENTITY_TYPE_MAP = {                      # legacy / free-form labels → taxono
     "product-of-company": "product", "product-of-legal-entity": "product",
     "foreign-legal-entity": "foreign_entity", "foreign-entity": "foreign_entity",
     "holding": "group", "holding-group": "group",
+    "company-product": "product", "product-company": "product",
+    "product-line": "product", "product-brand": "brand",
+    "brand-of-company": "brand", "subsidiary": "company",
 }
 
 _MAX_SEGMENT_LEN = 40    # a segment is a short label, not a sentence
@@ -87,6 +90,26 @@ B_CODES = frozenset({"b-missing", "b-empty", "b-copy", "b-no-new-source"})
 _PRODUCT_REV_FIELDS = ("product_revenue_2022", "product_revenue_2023",
                        "product_revenue_2024", "product_revenue_2025",
                        "product_rev_yoy_24_25")
+
+# Computed/extrapolated fields have no URL of their own BY DESIGN (the schema
+# says: compute YoY from the year pair, extrapolate 2026). They are exempt from
+# `unsourced` when every input they are computed FROM is itself sourced —
+# otherwise demanding a URL creates an unsatisfiable repair loop (Comindware
+# was repaired 9× over a projection that can never cite a page).
+_COMPUTED_INPUTS = {
+    "revenue_yoy_24_25": ("total_revenue_2024", "total_revenue_2025"),
+    "product_rev_yoy_24_25": ("product_revenue_2024", "product_revenue_2025"),
+    "ebitda_yoy_24_25": ("ebitda_2024", "ebitda_2025"),
+    "revenue_2026_projection": ("total_revenue_2024", "total_revenue_2025"),
+}
+
+
+def _inputs_sourced(fields: dict, names: tuple) -> bool:
+    for n in names:
+        f = fields.get(n)
+        if not (isinstance(f, dict) and value_of(f) is not None and f.get("source")):
+            return False
+    return True
 
 
 def _norm_name(s: str) -> str:
@@ -131,7 +154,7 @@ def is_placeholder(v) -> bool:
     s = str(v).strip().lower()
     if s in PLACEHOLDERS_EXACT:
         return True
-    return ((len(s) <= 60 or not re.search(r"\d", s))
+    return ((len(s) <= 60 or (len(s) <= 160 and not re.search(r"\d", s)))
             and any(p in s for p in PLACEHOLDERS))
 
 
@@ -276,7 +299,10 @@ def validate_record(rec: dict, a: dict | None, b: dict | None,
                 add(name, "warn", "bo-nalog-unopened",
                     "bo.nalog.ru cited without a figure-bearing snippet — was the page actually opened?")
         elif name not in _META_FIELDS:
-            add(name, "reject", "unsourced", "value has no source URL")
+            if name in _COMPUTED_INPUTS and _inputs_sourced(fields, _COMPUTED_INPUTS[name]):
+                pass   # computed from sourced inputs — no URL of its own
+            else:
+                add(name, "reject", "unsourced", "value has no source URL")
         conflict = f.get("conflict") if isinstance(f, dict) else None
         if isinstance(conflict, dict):
             av, bv = str(conflict.get("a", "")).strip(), str(conflict.get("b", "")).strip()
@@ -326,6 +352,8 @@ def validate_record(rec: dict, a: dict | None, b: dict | None,
         for name in schema_fields:
             if value_of(fields.get(name)) is not None:
                 continue
+            if f"unresolved: {name}".lower() in flags_text:
+                continue   # deliberately blanked (no verifiable source) — not a merge loss
             for coll in (a, b):
                 cf = (coll or {}).get("fields") or {}
                 if value_of(cf.get(name)) is not None and not is_placeholder(value_of(cf.get(name))):
