@@ -19,6 +19,15 @@ def chunk(content=None, tcs=None, finish=None):
     c.finish_reason = finish
     ck = MagicMock()
     ck.choices = [c]
+    ck.usage = None
+    return ck
+
+
+def usage_chunk(tokens_in, tokens_out):
+    """Final stream chunk: usage only, no choices (include_usage format)."""
+    ck = MagicMock()
+    ck.choices = []
+    ck.usage = MagicMock(prompt_tokens=tokens_in, completion_tokens=tokens_out)
     return ck
 
 
@@ -86,6 +95,34 @@ class TestDeepseekLoop(unittest.TestCase):
         self.assertIn("tool budget exhausted", tool_msgs[-1]["content"])
         self.assertTrue(any("Finish now" in m.get("content", "")
                             for m in msgs if m.get("role") == "user"))
+
+    def test_telemetry_counters_recorded(self):
+        it1 = search_call("c1", "запрос") + [usage_chunk(1000, 50)]
+        it2 = [chunk(content='{"fields": {}}'), chunk(finish="stop"),
+               usage_chunk(2000, 700)]
+        _text, log, _ev, _s, fc = self._run(
+            [it1, it2], search_results=[{"title": "t", "url": "https://a.ru/x",
+                                         "snippet": "s"}])
+        self.assertEqual(log.stats["requests"], 2)
+        self.assertEqual(log.stats["tokens_in"], 3000)
+        self.assertEqual(log.stats["tokens_out"], 750)
+        self.assertEqual(log.stats["searches"], 1)
+        self.assertEqual(log.stats["search_denied"], 0)
+        # include_usage requested on every call
+        for call in fc.chat.completions.create.call_args_list:
+            self.assertEqual(call.kwargs["stream_options"],
+                             {"include_usage": True})
+
+    def test_quota_denial_counted_not_executed(self):
+        from src import web_tools
+        its = [search_call("c1"), [chunk(content='{"fields": {}}'),
+                                   chunk(finish="stop")]]
+        with patch.object(web_tools, "QUOTA_EXHAUSTED", True):
+            _t, log, events, searches, _fc = self._run(its)
+        self.assertEqual(searches, [])                      # never executed
+        self.assertEqual(log.stats["search_denied"], 1)
+        self.assertEqual(log.stats["searches"], 0)
+        self.assertIn(("quota", ""), events)
 
     def test_runaway_tool_requests_abort(self):
         # model ignores the budget 4+ rounds in a row → clear RuntimeError

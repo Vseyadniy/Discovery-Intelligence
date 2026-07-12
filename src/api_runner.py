@@ -202,7 +202,9 @@ def _ground(obj: dict, log, label: str, only_fields=None) -> dict:
         log(f"[grounding] {label}: {len(details)} source(s) stripped/flagged")
         for d in details:
             log(f"[grounding]   {d}")
-    return {"tool_calls": slog.tool_calls, "grounding_affected": len(details)}
+    return {"tool_calls": slog.tool_calls, "grounding_affected": len(details),
+            # per-pass telemetry (counts only) → flows into events.jsonl
+            **{k: v for k, v in slog.stats.items() if v}}
 
 
 def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
@@ -220,6 +222,8 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
                   "discovery via web search NOW and return ONLY the JSON object that "
                   "belongs in companies.json — no prose, no file operations.")
         log(f"[api] discovery via {mr.banner()}")
+        import time as _t
+        t0 = _t.time()
         raw, engine = mr.collect(_SYS, prompt, on_event=_ev(log, "🗺 Discovery"))
         data = mr.extract_json(raw)
         grd = _ground(data, log, "Discovery")   # no-op shape for discovery output
@@ -229,7 +233,8 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
         (run_dir / "companies.json").write_text(
             json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
         runs._event(run_dir, "api_discovery", engine=engine,
-                    companies=len(data["companies"]), **grd)
+                    companies=len(data["companies"]),
+                    seconds=int(_t.time() - t0), **grd)
         return f"discovery ({engine}): {len(data['companies'])} companies, " \
                f"{len(data['segments'])} segments"
 
@@ -267,6 +272,7 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
                 b = gate._load(ar / f"{stem}_B.json")
                 engine, grd = "resumed", {}
                 ga = gb = {}
+                have = ""
                 if a is not None or b is not None:
                     have = " + ".join(x for x, v in (("A", a), ("B", b)) if v is not None)
                     log(f"[api] {brand} ({n}/{len(todo)}): resuming — collector "
@@ -341,7 +347,8 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
                 rec["entity"] = brand
                 _save(ar / f"{stem}_record.json", rec)
                 runs._event(run_dir, "api_company", brand=brand, engine=engine,
-                            seconds=int(time.time() - t0), **grd)
+                            seconds=int(time.time() - t0),
+                            **({"resumed": have} if have else {}), **grd)
                 done.append(brand)
             except Exception as ex_err:                      # keep the batch alive
                 failed.append(f"{brand} ({type(ex_err).__name__}: {str(ex_err)[:120]})")
@@ -362,6 +369,12 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
         log(f"[autofix] {len(fixes)} record(s) healed without web research: "
             + "; ".join(f"{k} ({len(v)})" for k, v in fixes.items()))
     g = runs.run_gate(run_dir)
+    from collections import Counter
+    code_hist = Counter(i["code"] for e in g["rejected"]
+                        for i in e["issues"] if i["severity"] == "reject")
+    runs._event(run_dir, "gate", accepted=len(g["accepted"]),
+                rejected=len(g["rejected"]),
+                **({"codes": dict(code_hist)} if code_hist else {}))
     if g["rejected"]:
         fixed, manual, failed = [], [], []
         for e in g["rejected"][:batch]:
@@ -443,6 +456,8 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
                 + f" Prose in {meta['output_language']}; money as «N млн ₽»."
                 + (f" Allowed segments: {', '.join(segments)}." if segments else ""))
             log(f"[api] repair {e['entity']} ({len(issues)} issues)…")
+            import time as _t
+            t0 = _t.time()
             try:                                 # one hung/failed repair must
                 raw, engine = mr.collect(        # not block the rest of the batch
                     _SYS, prompt, on_event=_ev(log, f"🔧 Repair · {e['entity']}"))
@@ -454,7 +469,8 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
                 rec["entity"] = e["entity"]
                 _save(e["path"], rec)
                 runs._event(run_dir, "api_repair", brand=e["entity"],
-                            engine=engine, sig=sig, **grd)
+                            engine=engine, sig=sig,
+                            seconds=int(_t.time() - t0), **grd)
                 fixed.append(e["entity"])
             except Exception as ex_err:
                 failed.append(f"{e['entity']} ({type(ex_err).__name__}: "

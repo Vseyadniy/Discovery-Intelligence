@@ -69,6 +69,16 @@ class TestResearchResume(unittest.TestCase):
         b = json.loads((self.rd / "agent_runs" / "тест_B.json").read_text())
         self.assertEqual(b["collector"], "B")          # fresh B was saved
 
+    def test_resume_recorded_in_telemetry_event(self):
+        self._write_a()
+        self._run("gpt")
+        evs = [json.loads(l) for l in
+               (self.rd / "events.jsonl").read_text(encoding="utf-8").splitlines()]
+        company = [e for e in evs if e["event"] == "api_company"]
+        self.assertEqual(len(company), 1)
+        self.assertEqual(company[0]["resumed"], "A")   # stage-level resume trace
+        self.assertIn("seconds", company[0])
+
     def test_fresh_company_runs_both_collectors(self):
         _summary, calls = self._run("gpt")
         self.assertEqual(sorted(calls), ["a-PROMPT", "b-PROMPT"])

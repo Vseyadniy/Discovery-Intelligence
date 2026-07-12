@@ -727,6 +727,78 @@ def progress(run_dir: Path) -> dict:
             "rejected": rejected, "pending": pending, "phase": phase}
 
 
+_TELEMETRY_STAGES = {           # event name → stage label (+failed twin)
+    "api_discovery": "discovery", "api_company": "research",
+    "api_company_failed": "research", "api_repair": "repair",
+    "api_repair_failed": "repair", "api_collector_b_rerun": "b-rerun",
+}
+_TELEMETRY_SUMS = ("seconds", "tool_calls", "searches", "fetches",
+                   "search_denied", "budget_rounds", "requests",
+                   "tokens_in", "tokens_out", "grounding_affected")
+
+
+def telemetry_summary(run_dir: Path) -> str:
+    """Aggregate the run's events.jsonl (the per-run append-only telemetry log)
+    into a per-stage picture: passes, failures, resumes, timing, token usage,
+    search/fetch activity, budget hits, grounding strips and gate trajectory."""
+    stages: dict[str, dict] = {}
+    gates, autofixed, salvaged = [], 0, 0
+    try:
+        lines = (run_dir / "events.jsonl").read_text(encoding="utf-8").splitlines()
+    except FileNotFoundError:
+        return "no events.jsonl yet — nothing recorded for this run"
+    for line in lines:
+        try:
+            ev = json.loads(line)
+        except Exception:
+            continue
+        name = ev.get("event", "")
+        if name == "gate":
+            gates.append(ev)
+        elif name == "autofixed":
+            autofixed += ev.get("fields", 0)
+        elif name == "salvaged":
+            salvaged += ev.get("fields", 0)
+        stage = _TELEMETRY_STAGES.get(name)
+        if not stage:
+            continue
+        s = stages.setdefault(stage, {"passes": 0, "failed": 0, "resumed": 0,
+                                      **{k: 0 for k in _TELEMETRY_SUMS}})
+        if name.endswith("_failed"):
+            s["failed"] += 1
+            continue
+        s["passes"] += 1
+        if ev.get("resumed"):
+            s["resumed"] += 1
+        for k in _TELEMETRY_SUMS:
+            v = ev.get(k)
+            if isinstance(v, (int, float)):
+                s[k] += v
+    out = [f"telemetry — {run_dir.name}"]
+    for stage in ("discovery", "research", "repair", "b-rerun"):
+        s = stages.get(stage)
+        if not s:
+            continue
+        out.append(
+            f"  {stage:9} passes={s['passes']} failed={s['failed']} "
+            f"resumed={s['resumed']} time={s['seconds']}s "
+            f"tools={s['tool_calls']} "
+            f"tokens={s['tokens_in']}+{s['tokens_out']} "
+            f"search={s['searches']} (denied {s['search_denied']}) "
+            f"fetch={s['fetches']} budget_hits={s['budget_rounds']} "
+            f"grounding_stripped={s['grounding_affected']}")
+    if autofixed or salvaged:
+        out.append(f"  local     autofixed_fields={autofixed} salvaged_fields={salvaged}")
+    if gates:
+        traj = " → ".join(f"{g['accepted']}✓/{g['rejected']}✗" for g in gates[-6:])
+        out.append(f"  gate      {traj}")
+        last_codes = gates[-1].get("codes")
+        if last_codes:
+            out.append(f"  last rejects: "
+                       + ", ".join(f"{c}×{n}" for c, n in sorted(last_codes.items())))
+    return "\n".join(out)
+
+
 def eta_seconds(run_dir: Path, pending: int, rejected: int) -> int | None:
     """Rough time-to-finish from this run's recorded API timings (None when
     nothing is left). Falls back to ~5 min per company before the first
@@ -1093,7 +1165,8 @@ def main() -> None:
     c.add_argument("--depth", required=True, choices=list(load_depths()))
     c.add_argument("--model", default="chatgpt", choices=list(MODELS))
     sub.add_parser("list")
-    for name in ("build", "analyze", "progress", "prompt", "publish", "gate", "salvage"):
+    for name in ("build", "analyze", "progress", "prompt", "publish", "gate",
+                 "salvage", "telemetry"):
         p = sub.add_parser(name)
         p.add_argument("run_id")
     n = sub.add_parser("next")
@@ -1121,6 +1194,8 @@ def main() -> None:
             print("nothing to salvage — records already carry their collectors' fields")
         for ent, flds in s.items():
             print(f"{ent}: restored {len(flds)} fields ({', '.join(flds[:6])}{'…' if len(flds) > 6 else ''})")
+    elif args.cmd == "telemetry":
+        print(telemetry_summary(run_dir_for(args.run_id)))
     elif args.cmd == "list":
         for m in list_runs():
             print(f"{m['run_id']:50}  {m['status']:12}  {m['market']} [{m['depth']}]")

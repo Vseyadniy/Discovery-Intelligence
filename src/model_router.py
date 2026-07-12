@@ -312,12 +312,18 @@ def _run_deepseek_tools(system: str, user: str, max_tokens: int = 16000,
                 f"files), or pick another provider for this step")
         kwargs = dict(model=DEEPSEEK_MODEL, max_tokens=max_tokens,
                       messages=messages, tools=_DS_TOOLS, tool_choice="auto",
-                      stream=True, timeout=req_timeout)
+                      stream=True, timeout=req_timeout,
+                      stream_options={"include_usage": True})
         ev("thinking", "")   # liveness between tool batches: the status line
         content_parts: list[str] = []   # must move even while the model decides
         acc: dict[int, dict] = {}          # tool-call deltas keyed by index
         finish = None
+        log.stats["requests"] += 1
         for chunk in _deepseek().chat.completions.create(**kwargs):
+            u = getattr(chunk, "usage", None)   # final chunk: usage, no choices
+            if u is not None:
+                log.stats["tokens_in"] += getattr(u, "prompt_tokens", 0) or 0
+                log.stats["tokens_out"] += getattr(u, "completion_tokens", 0) or 0
             if not chunk.choices:
                 continue
             ch = chunk.choices[0]
@@ -372,6 +378,7 @@ def _run_deepseek_tools(system: str, user: str, max_tokens: int = 16000,
                         # the model once how to proceed without search. Denials
                         # still consume the budget so the loop stays bounded.
                         calls += 1
+                        log.stats["search_denied"] += 1
                         if not quota_announced:
                             quota_announced = True
                             ev("quota", "")
@@ -386,6 +393,7 @@ def _run_deepseek_tools(system: str, user: str, max_tokens: int = 16000,
                         log.log_search(results)
                         payload = json.dumps(results, ensure_ascii=False)
                     except SearchQuotaExhausted:
+                        log.stats["search_denied"] += 1
                         if not quota_announced:
                             quota_announced = True
                             ev("quota", "")
@@ -417,6 +425,7 @@ def _run_deepseek_tools(system: str, user: str, max_tokens: int = 16000,
                 messages[i]["content"] = f"[dropped from context: {dropped}]"
             if batch_exhausted:
                 exhausted_rounds += 1
+                log.stats["budget_rounds"] = exhausted_rounds
                 if exhausted_rounds == 1:
                     messages.append({"role": "user", "content":
                         "Finish now: return the strict JSON using only sources "

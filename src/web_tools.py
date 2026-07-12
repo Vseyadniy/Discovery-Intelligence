@@ -150,9 +150,15 @@ class SourceLog:
         self.seen: dict[str, str] = {}      # normalized → original URL
         self.fetched: dict[str, str] = {}   # normalized → page text
         self.tool_calls = 0
+        # per-pass telemetry counters, filled by the tools loop and flushed
+        # into the run's events.jsonl (counts only — no queries/URLs/keys)
+        self.stats = {"searches": 0, "fetches": 0, "search_denied": 0,
+                      "budget_rounds": 0, "requests": 0,
+                      "tokens_in": 0, "tokens_out": 0}
 
     def log_search(self, results: list[dict]) -> None:
         with self._lock:
+            self.stats["searches"] += 1
             for r in results or []:
                 n = _norm(r.get("url", ""))
                 if n:
@@ -160,6 +166,7 @@ class SourceLog:
 
     def log_fetch(self, url: str, result: dict) -> None:
         with self._lock:
+            self.stats["fetches"] += 1
             for u in (url, (result or {}).get("final_url", "")):
                 n = _norm(u)
                 if n:
