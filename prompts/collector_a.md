@@ -68,6 +68,27 @@ rusprofile/list-org/tadviser and the value genuinely was not there** — name th
 source you tried in `assumptions`. "bo.nalog didn't render" is NOT a valid reason to
 leave INN/revenue blank; the fallback sources almost always have them.
 
+## Source priority by field type — and when to STOP
+Work field-type by field-type; one authoritative source in hand beats three weak
+confirmations. Never reopen a page (or an obvious mirror of it) you already
+consulted this session — spend the budget on UNRESOLVED fields instead.
+
+- **Registry facts** (`legal_entity_name`, `inn`, `total_revenue_*`, `ebitda_*`,
+  `headcount`): one tier-1/2 registry card (bo.nalog → rusprofile / list-org /
+  zachestnyibiznes / audit-it) is SUFFICIENT — take it, set confidence, stop.
+  Broaden only if the card is blank, will not render, or two registries disagree.
+- **Company/product facts** (`description`, `key_products`, `other_products`,
+  `business_model`, `target_customers`, `positioning`, `website`): the company's
+  OWN pages first — product, pricing, «О компании». Stop once you can name
+  specifics; skip SEO catalogs and reseller copies of the same text.
+- **Product-line revenue** (`product_revenue_*`, `product_revenue_source`): a
+  sector rating / analyst table (tier 2) or a stated split; otherwise derive it
+  and SAY HOW in `product_revenue_source`. Do not chase forum guesses.
+
+Broaden beyond the priority class ONLY while a field is still missing, sources
+conflict, or your confidence would be `low` — and stop as soon as that reason
+disappears. Finishing under budget with well-sourced fields is success.
+
 ## Language of values
 Write free-text values (`description`, and any prose) in **{{output_language}}**.
 Keep **proper names verbatim** — brand, legal-entity and product names are never

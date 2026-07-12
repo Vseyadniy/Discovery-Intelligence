@@ -713,7 +713,12 @@ of those labels — the gate enforces it.
     return f"""# Repair pass — {market}
 
 The records below FAILED machine validation and are EXCLUDED from the deliverable
-until fixed. Fix ONLY the fields listed — by actually opening sources in this chat —
+until fixed. REUSE EXISTING EVIDENCE FIRST: each company's `_A.json`/`_B.json`
+often already holds the needed value or the exact URL to reopen — check them
+before ANY new search. New research is only for fields that stay unresolved,
+following the field-type source priority (registry card for registry facts, the
+company's own pages for product facts, dated tier-2 press for news/market).
+Fix ONLY the fields listed — by actually opening sources in this chat —
 then EDIT the existing JSON files IN PLACE. **Editing means modifying the named
 fields inside the file while keeping every other field exactly as it is.** Never
 re-save a record containing only the fixed fields — the gate compares each record

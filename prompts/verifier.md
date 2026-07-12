@@ -31,6 +31,12 @@ Collector B output:
    official/registry value (Collector A) for factual fields (revenue, legal name,
    INN) and the market value (Collector B) for `latest_news`/`segment`. Record BOTH
    values in `conflict`.
+4. When tiers tie, prefer the source CLASS matched to the field type: a registry
+   card for registry facts, the company's own product pages for product facts,
+   dated press for news/market fields.
+5. You do NOT browse. Consolidate only the evidence already inside A and B — if
+   it is insufficient, leave the field blank + `review_flags` note instead of
+   promoting a weak source.
 
 ## Final confidence rules
 - `high`  : official primary source, OR ≥2 independent sources agree.

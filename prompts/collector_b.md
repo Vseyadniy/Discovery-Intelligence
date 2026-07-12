@@ -45,6 +45,24 @@ smart-ranking.ru). Cite the rating and its year; mark as estimate if it is a ran
 If a company is genuinely absent from third-party coverage, say so per field in
 `assumptions` and name the searches you tried.
 
+## Source priority by field type — and when to STOP
+One authoritative page in hand beats three weak confirmations; never reopen a
+page (or a copy of it on another domain) already consulted this session.
+
+- **Market view** (`segment`, `positioning`, `description` specifics): tier-2
+  industry press and rankings first (CNews, TAdviser, RBC, отраслевые рейтинги);
+  vc.ru / habr are fine as tier-3 colour, not as sole support.
+- **`latest_news`**: one dated tier-2 article about a SIGNIFICANT event; skip
+  listicles, SEO digests and pages that merely re-tell another article — cite
+  the most original source you can reach.
+- **Figures the press reports** (`*revenue*`, `headcount`): take them with the
+  ranking/article as source and honest confidence; do not hunt for a third
+  repetition of the same number.
+
+Broaden beyond the priority class ONLY while a field is missing, conflicting,
+or would be `low` confidence — and stop as soon as that reason disappears.
+Finishing under budget with well-sourced fields is success.
+
 ## Language of values
 Write free-text values (`description`, `latest_news`, and any prose) in
 **{{output_language}}**. Keep **proper names verbatim** — brand, legal-entity and

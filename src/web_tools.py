@@ -149,12 +149,31 @@ class SourceLog:
         self._lock = threading.Lock()
         self.seen: dict[str, str] = {}      # normalized → original URL
         self.fetched: dict[str, str] = {}   # normalized → page text
+        self.queries: set[str] = set()      # normalized queries already run
         self.tool_calls = 0
         # per-pass telemetry counters, filled by the tools loop and flushed
         # into the run's events.jsonl (counts only — no queries/URLs/keys)
         self.stats = {"searches": 0, "fetches": 0, "search_denied": 0,
                       "budget_rounds": 0, "requests": 0,
-                      "tokens_in": 0, "tokens_out": 0}
+                      "tokens_in": 0, "tokens_out": 0,
+                      "early_stop": 0, "extended": 0,
+                      "dup_queries": 0, "cache_hits": 0}
+
+    def log_query(self, q: str) -> bool:
+        """Register a search query; False when the same query already ran this
+        session (duplicate — not worth an HTTP call or quota)."""
+        qn = " ".join(str(q).lower().split())
+        with self._lock:
+            if qn in self.queries:
+                return False
+            self.queries.add(qn)
+            return True
+
+    def cached_text(self, url: str) -> str | None:
+        """Page text if this URL (or its redirect target) was already fetched
+        this session — a re-read costs nothing and hits no server."""
+        with self._lock:
+            return self.fetched.get(_norm(url))
 
     def log_search(self, results: list[dict]) -> None:
         with self._lock:

@@ -425,6 +425,17 @@ def _run_deepseek_tools(system: str, user: str, max_tokens: int = 16000,
                 name = t["name"]
                 if name == "web_search":
                     q = str(args.get("query", ""))
+                    if not log.log_query(q):
+                        # identical query already ran — deny without HTTP/quota;
+                        # non-novel, so repeats push the pass toward early stop
+                        log.stats["dup_queries"] += 1
+                        novelty.append(False)
+                        messages.append({"role": "tool", "tool_call_id": t["id"],
+                                         "content": json.dumps({"error": (
+                                             "this exact query already ran this "
+                                             "session — refine it, or open pages "
+                                             "already found")}, ensure_ascii=False)})
+                        continue
                     if web_tools.QUOTA_EXHAUSTED:
                         # deny instantly — no HTTP, no status churn, and tell
                         # the model once how to proceed without search. Denials
@@ -458,11 +469,22 @@ def _run_deepseek_tools(system: str, user: str, max_tokens: int = 16000,
                             ensure_ascii=False)
                 elif name == "fetch_url":
                     u = str(args.get("url", ""))
-                    ev("reading", u)
-                    result = fetch_url(u)          # never raises: {url, error}
-                    log.log_fetch(u, result)
-                    fetch_idxs.append(len(messages))
-                    payload = json.dumps(result, ensure_ascii=False)
+                    cached = log.cached_text(u)
+                    if cached is not None:
+                        # re-read served from the session cache: no HTTP, and
+                        # non-novel — repeats wind the pass down, not up
+                        log.stats["cache_hits"] += 1
+                        payload = json.dumps(
+                            {"url": u, "note": "served from session cache — "
+                             "you already fetched this page", "text": cached},
+                            ensure_ascii=False)
+                        fetch_idxs.append(len(messages))   # still trimmable
+                    else:
+                        ev("reading", u)
+                        result = fetch_url(u)      # never raises: {url, error}
+                        log.log_fetch(u, result)
+                        fetch_idxs.append(len(messages))
+                        payload = json.dumps(result, ensure_ascii=False)
                 else:
                     payload = json.dumps({"error": f"unknown tool «{name}»"})
                 novelty.append(len(log.seen) > new_before)
