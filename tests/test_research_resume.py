@@ -24,11 +24,11 @@ class TestResearchResume(unittest.TestCase):
     def _run(self, mode):
         calls = []
 
-        def collect(system, user, max_tokens=16000, on_event=None):
+        def collect(system, user, max_tokens=16000, on_event=None, **kw):
             calls.append(user)
             return '{"fields": {"f": {"value": "v", "source": "https://s.ru/p"}}}', "eng"
 
-        def verify(system, user, escalate, max_tokens=12000, on_event=None):
+        def verify(system, user, escalate, max_tokens=12000, on_event=None, **kw):
             return '{"fields": {"merged": {"value": 1}}}', "eng"
 
         with patch.object(api_runner.runs, "_load_meta",

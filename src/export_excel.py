@@ -56,7 +56,7 @@ COLUMNS = [
     "segment", "description", "business_model", "target_customers", "positioning",
     *FINANCIAL_COLUMNS,
     "headcount", "key_products", "other_products", "latest_news", "confidence_entity_match",
-    "financial_sources", "other_sources",
+    "data_quality", "financial_sources", "other_sources",
 ]
 
 # Fields whose sources land in `financial_sources` (registry + money + size);
@@ -96,7 +96,7 @@ _WIDTHS = {
     **{c: 13 for c in _PERCENT_COLS},
     "revenue_2026_projection": 16, "product_revenue_source": 40,
     "headcount": 10, "key_products": 40, "other_products": 36, "latest_news": 48,
-    "confidence_entity_match": 14,
+    "confidence_entity_match": 14, "data_quality": 20,
     "financial_sources": 45, "other_sources": 45, "sources": 50, "notes": 40,
 }
 
@@ -168,7 +168,8 @@ def read_kb(db_path: Path) -> tuple[list[str], list[dict]]:
 
 
 # Columns derived from record metadata rather than a same-named field.
-_DERIVED_COLS = ("entity_type", "confidence_entity_match", "financial_sources", "other_sources")
+_DERIVED_COLS = ("entity_type", "confidence_entity_match", "data_quality",
+                 "financial_sources", "other_sources")
 
 
 def _field_to_col(cols: list[str]) -> dict:
@@ -249,6 +250,18 @@ def _record_to_row(rec: dict, cols: list[str] | None = None) -> dict:
             if col:
                 unresolved.append(col)
     row["_unresolved"] = unresolved   # meta key: not a column, csv ignores it
+
+    # record + field quality states (additive layer over the gate verdict);
+    # brand_name is derived from `entity` on export, so its absence as a
+    # record field is not a gap
+    q = gate.record_quality(
+        rec, [f for f in field_to_col
+              if f not in ("revenue", "brand_name") or f in fields])
+    row["data_quality"] = f"{q['status']} · {q['coverage_pct']}%" + (
+        f" · mandatory gaps: {', '.join(q['mandatory_gaps'][:3])}"
+        if q["mandatory_gaps"] else "")
+    row["_low_conf"] = [field_to_col[f] for f in q["low_confidence"]
+                        if f in field_to_col]      # peach fill per CELL
     return row
 
 
@@ -318,6 +331,9 @@ def write_xlsx(headers: list[str], rows: list[dict], out: Path) -> None:
             cell.alignment = wrap_top
             if low:
                 cell.fill = low_fill
+        for col in r.get("_low_conf", []):
+            if col in hidx:
+                ws.cell(row=ri, column=hidx[col]).fill = low_fill
         for col in r.get("_unresolved", []):
             if col in hidx:
                 ws.cell(row=ri, column=hidx[col]).fill = unresolved_fill

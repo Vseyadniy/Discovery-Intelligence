@@ -254,8 +254,36 @@ _DS_TOOLS_ADDENDUM = (
     "search results this session. If a page fails to fetch, try an alternative "
     "source rather than answering from memory.")
 
-_DS_MAX_TOOL_CALLS = 25   # hard cap, then the model is forced to answer
+_DS_MAX_TOOL_CALLS = 25   # fallback cap when a stage has no configured budget
 _DS_KEEP_FETCHES = 8      # newest fetched pages kept verbatim in the ~64k context
+
+# Per-stage tool budgets (env-configurable) + field-aware stopping. The base
+# budget can EXTEND (by DS_BUDGET_EXTEND calls) only while the caller says
+# required fields are still unresolved AND recent calls keep producing new
+# evidence; conversely, a pass that stops finding anything new is finished
+# EARLY — agents are never pushed to exhaust a budget for its own sake.
+_STAGE_BUDGET_DEFAULTS = {"discovery": 20, "collector_a": 25,
+                          "collector_b": 25, "repair": 12}
+_DS_NOVELTY_WINDOW = 6    # executed calls with zero new URLs → evidence dried up
+
+
+def stage_budget(stage: str) -> int:
+    """Tool budget for a research stage: DS_BUDGET_<STAGE> env, else default."""
+    raw = os.environ.get(f"DS_BUDGET_{stage.upper()}", "")
+    try:
+        n = int(raw)
+        if n > 0:
+            return n
+    except ValueError:
+        pass
+    return _STAGE_BUDGET_DEFAULTS.get(stage, _DS_MAX_TOOL_CALLS)
+
+
+def _budget_extend() -> int:
+    try:
+        return max(0, int(os.environ.get("DS_BUDGET_EXTEND", "") or 8))
+    except ValueError:
+        return 8
 _DS_IDLE_TIMEOUT = 180.0  # max silence between stream chunks before we give up
 _DS_PASS_DEADLINE = 1500  # max seconds for one whole tools pass (25 min)
 
@@ -266,7 +294,8 @@ _QUOTA_NOTE = ("search quota exhausted — no new searches available. Work with 
 
 
 def _run_deepseek_tools(system: str, user: str, max_tokens: int = 16000,
-                        on_event=None):
+                        on_event=None, budget: int | None = None,
+                        allow_extend: bool = True):
     """DeepSeek research pass: Chat Completions function-calling loop over the
     app's web_search/fetch_url tools. Returns (text, SourceLog) — the log holds
     every URL the model saw, for the grounding check in api_runner.
@@ -294,8 +323,25 @@ def _run_deepseek_tools(system: str, user: str, max_tokens: int = 16000,
     calls = 0
     nudged = False
     exhausted_rounds = 0
+    base = int(budget or _DS_MAX_TOOL_CALLS)
+    hard = base + (_budget_extend() if allow_extend else 0)
+    novelty: list[bool] = []     # per executed call: did it surface any NEW URL?
+
+    def _cap() -> int:
+        # the extension is earned, not granted: only while recent calls keep
+        # producing evidence the model hasn't seen yet
+        if allow_extend and novelty and any(novelty[-_DS_NOVELTY_WINDOW:]):
+            return hard
+        return base
+
+    def _dried_up() -> bool:
+        # field-aware early stop: enough spend AND a full window of calls that
+        # produced nothing new — finishing beats burning the rest of the budget
+        return (len(novelty) >= max(_DS_NOVELTY_WINDOW, base // 2)
+                and not any(novelty[-_DS_NOVELTY_WINDOW:]))
+
     while True:
-        capped = calls >= _DS_MAX_TOOL_CALLS
+        capped = calls >= _cap() or _dried_up()
         # Tools stay in the request even past the call budget: REMOVING them
         # mid-conversation made DeepSeek leak its internal tool markup
         # ('<｜DSML｜…') as plain text instead of answering (seen live on
@@ -355,17 +401,23 @@ def _run_deepseek_tools(system: str, user: str, max_tokens: int = 16000,
                                  for t in tool_calls]})
             batch_exhausted = False
             for t in tool_calls:
-                if calls >= _DS_MAX_TOOL_CALLS:
+                if calls >= _cap() or _dried_up():
                     batch_exhausted = True
+                    if _dried_up() and calls < hard:
+                        log.stats["early_stop"] = 1
+                        reason = (f"the last {_DS_NOVELTY_WINDOW} calls produced "
+                                  "no new evidence — stop researching")
+                    else:
+                        reason = f"tool budget exhausted ({calls} calls)"
                     messages.append({"role": "tool", "tool_call_id": t["id"],
                                      "content": json.dumps({"error": (
-                                         f"tool budget exhausted ({_DS_MAX_TOOL_CALLS} "
-                                         "calls) — stop researching and return the "
-                                         "strict JSON answer now, using only sources "
-                                         "already consulted")}, ensure_ascii=False)})
+                                         f"{reason} — return the strict JSON "
+                                         "answer now, using only sources already "
+                                         "consulted")}, ensure_ascii=False)})
                     continue
                 calls += 1
                 log.tool_calls = calls
+                new_before = len(log.seen)
                 try:
                     args = json.loads(t["arguments"] or "{}")
                 except Exception:
@@ -378,6 +430,7 @@ def _run_deepseek_tools(system: str, user: str, max_tokens: int = 16000,
                         # the model once how to proceed without search. Denials
                         # still consume the budget so the loop stays bounded.
                         calls += 1
+                        novelty.append(False)   # a denial yields no evidence
                         log.stats["search_denied"] += 1
                         if not quota_announced:
                             quota_announced = True
@@ -412,6 +465,7 @@ def _run_deepseek_tools(system: str, user: str, max_tokens: int = 16000,
                     payload = json.dumps(result, ensure_ascii=False)
                 else:
                     payload = json.dumps({"error": f"unknown tool «{name}»"})
+                novelty.append(len(log.seen) > new_before)
                 messages.append({"role": "tool", "tool_call_id": t["id"],
                                  "content": payload})
             # keep only the newest pages verbatim in the model's context —
@@ -438,6 +492,7 @@ def _run_deepseek_tools(system: str, user: str, max_tokens: int = 16000,
             continue
         text = content.strip()
         if text and "{" in text:
+            log.stats["extended"] = max(0, calls - base)   # calls earned past base
             return text, log
         if not nudged:                             # one retry, then give up
             nudged = True
@@ -498,8 +553,11 @@ def _run_claude(model: str, system: str, user: str, max_tokens: int = 16000,
 
 
 # ── public interface: the orchestrator calls these ───────────────────────────
-def collect(system: str, user: str, max_tokens: int = 16000, on_event=None):
-    """Run one collector (web research on). Returns (raw_text, engine_label)."""
+def collect(system: str, user: str, max_tokens: int = 16000, on_event=None,
+            budget: int | None = None, allow_extend: bool = True):
+    """Run one collector (web research on). Returns (raw_text, engine_label).
+    `budget`/`allow_extend` shape the app-side tool budget (DeepSeek only —
+    server-side search providers ignore them)."""
     if MODE == "claude":
         return _run_claude(CLAUDE_MODEL, system, user, max_tokens,
                            web=USE_WEB_SEARCH, on_event=on_event), CLAUDE_MODEL
@@ -511,7 +569,8 @@ def collect(system: str, user: str, max_tokens: int = 16000, on_event=None):
         # web tools. v1: the SourceLog travels through the module global (see
         # LAST_SOURCE_LOG note) — do not run two deepseek collects concurrently.
         global LAST_SOURCE_LOG
-        text, log = _run_deepseek_tools(system, user, max_tokens, on_event)
+        text, log = _run_deepseek_tools(system, user, max_tokens, on_event,
+                                        budget=budget, allow_extend=allow_extend)
         LAST_SOURCE_LOG = log
         return text, f"{DEEPSEEK_MODEL}+tools"
     return _run_cheap(system, user, web=True, max_tokens=max_tokens,

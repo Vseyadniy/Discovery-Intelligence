@@ -471,6 +471,48 @@ def validate_record(rec: dict, a: dict | None, b: dict | None,
     return issues
 
 
+# ── record/field quality (ADDITIVE — never changes accept/reject) ────────────
+def field_state(name: str, f, flags_text: str) -> str:
+    """One field's quality state: verified | low-confidence | unresolved |
+    missing. «unresolved» = deliberately blanked (no verifiable source, named
+    in an `unresolved:` review flag); «missing» = simply empty."""
+    v = value_of(f)
+    if v is None or is_placeholder(v):
+        return "unresolved" if f"unresolved: {name}".lower() in flags_text else "missing"
+    if isinstance(f, dict) and str(f.get("confidence", "")).lower() == "low":
+        return "low-confidence"
+    return "verified"
+
+
+def record_quality(rec: dict, schema_fields: list[str] | None = None) -> dict:
+    """Quality profile of one record ON TOP of the gate verdict: an accepted
+    record can be `complete` (every schema field verified) or carry `gaps`
+    (empty/unresolved fields) and/or `low-conf` evidence. Registry fields
+    (ИНН, revenue, headcount) count as mandatory: a gap there is flagged
+    separately as mandatory_gaps."""
+    fields = rec.get("fields") or {}
+    names = [n for n in (schema_fields or list(fields)) if n not in _META_FIELDS]
+    flags_text = " ".join(str(x) for x in (rec.get("review_flags") or [])).lower()
+    states = {n: field_state(n, fields.get(n), flags_text) for n in names}
+    missing = sorted(n for n, s in states.items() if s == "missing")
+    unresolved = sorted(n for n, s in states.items() if s == "unresolved")
+    low = sorted(n for n, s in states.items() if s == "low-confidence")
+    filled = sum(1 for s in states.values() if s in ("verified", "low-confidence"))
+    coverage = round(100 * filled / max(len(names), 1))
+    mandatory_gaps = sorted(n for n in (*REQUIRED_FIELDS, *REGISTRY_FIELDS)
+                            if states.get(n) in ("missing", "unresolved"))
+    parts = []
+    if missing or unresolved:
+        parts.append(f"gaps {len(missing) + len(unresolved)}")
+    if low:
+        parts.append(f"low-conf {len(low)}")
+    status = "complete" if not parts else " + ".join(parts)
+    return {"status": status, "coverage_pct": coverage, "missing": missing,
+            "unresolved": unresolved, "low_confidence": low,
+            "mandatory_gaps": mandatory_gaps, "fields_total": len(names),
+            "fields_filled": filled}
+
+
 # ── whole-run gate ────────────────────────────────────────────────────────────
 def _load(path: Path) -> dict | None:
     try:

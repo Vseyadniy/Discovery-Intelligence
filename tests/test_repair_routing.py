@@ -36,11 +36,11 @@ class TestRepairRouting(unittest.TestCase):
                  "issues": issues, "record": {"fields": {}}, "verdict": "rejected"}
         calls = {"collect": [], "verify": []}
 
-        def collect(system, user, max_tokens=16000, on_event=None):
+        def collect(system, user, max_tokens=16000, on_event=None, **kw):
             calls["collect"].append(user)
             return '{"fields": {"f": {"value": "v", "source": "https://s.ru/p"}}}', "eng"
 
-        def verify(system, user, escalate, max_tokens=12000, on_event=None):
+        def verify(system, user, escalate, max_tokens=12000, on_event=None, **kw):
             calls["verify"].append(user)
             return '{"fields": {"merged": {"value": 1}}}', "eng"
 

@@ -233,7 +233,9 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
         log(f"[api] discovery via {mr.banner()}")
         import time as _t
         t0 = _t.time()
-        raw, engine = mr.collect(_SYS, prompt, on_event=_ev(log, "🗺 Discovery"))
+        raw, engine = mr.collect(_SYS, prompt, on_event=_ev(log, "🗺 Discovery"),
+                                 budget=mr.stage_budget("discovery"),
+                                 allow_extend=False)   # a list task: no extension
         data = mr.extract_json(raw)
         grd = _ground(data, log, "Discovery")   # no-op shape for discovery output
         if not (data.get("companies") and data.get("segments")):
@@ -300,7 +302,8 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
                     if a is None:
                         a_raw, engine = mr.collect(
                             _SYS, _collector_prompt("a", brand, hint, schema, registry, corrections),
-                            16000, _ev(log, f"🟦 Collector A · {brand} ({n}/{len(todo)})"))
+                            16000, _ev(log, f"🟦 Collector A · {brand} ({n}/{len(todo)})"),
+                            budget=mr.stage_budget("collector_a"))
                         a = mr.extract_json(a_raw)
                         ga = _ground(a, log, f"Collector A · {brand}")
                         a.update(entity=brand, collector="A")
@@ -308,7 +311,8 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
                     if b is None:
                         b_raw, engine = mr.collect(
                             _SYS, _collector_prompt("b", brand, hint, schema, registry, corrections),
-                            16000, _ev(log, f"🟩 Collector B · {brand} ({n}/{len(todo)})"))
+                            16000, _ev(log, f"🟩 Collector B · {brand} ({n}/{len(todo)})"),
+                            budget=mr.stage_budget("collector_b"))
                         b = mr.extract_json(b_raw)
                         gb = _ground(b, log, f"Collector B · {brand}")
                         b.update(entity=brand, collector="B")
@@ -432,7 +436,8 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
                     f"Collector B from scratch, then re-merging…")
                 b_raw, engine = mr.collect(
                     _SYS, _collector_prompt("b", brand, "", schema, registry, corrections),
-                    16000, _ev(log, f"🟩 Collector B (rerun) · {brand}"))
+                    16000, _ev(log, f"🟩 Collector B (rerun) · {brand}"),
+                    budget=mr.stage_budget("collector_b"))
                 b = mr.extract_json(b_raw)
                 grd = _ground(b, log, f"Collector B rerun · {brand}")
                 b.update(entity=brand, collector="B")
@@ -467,9 +472,14 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
             log(f"[api] repair {e['entity']} ({len(issues)} issues)…")
             import time as _t
             t0 = _t.time()
+            # field-aware: the budget may extend only while REQUIRED/registry
+            # fields are among the failures (and evidence keeps appearing)
+            important = any(i["field"] in (*gate.REQUIRED_FIELDS, *gate.REGISTRY_FIELDS)
+                            for i in issues)
             try:                                 # one hung/failed repair must
                 raw, engine = mr.collect(        # not block the rest of the batch
-                    _SYS, prompt, on_event=_ev(log, f"🔧 Repair · {e['entity']}"))
+                    _SYS, prompt, on_event=_ev(log, f"🔧 Repair · {e['entity']}"),
+                    budget=mr.stage_budget("repair"), allow_extend=important)
                 rec = mr.extract_json(raw)
                 # repair audits ONLY the fields the model was asked to fix — the
                 # rest keep sources grounded in their original research pass

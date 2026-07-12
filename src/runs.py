@@ -735,7 +735,8 @@ _TELEMETRY_STAGES = {           # event name → stage label (+failed twin)
 }
 _TELEMETRY_SUMS = ("seconds", "tool_calls", "searches", "fetches",
                    "search_denied", "budget_rounds", "requests",
-                   "tokens_in", "tokens_out", "grounding_affected")
+                   "tokens_in", "tokens_out", "grounding_affected",
+                   "early_stop", "extended")
 
 
 # event keys that only exist since telemetry landed — their absence in older
@@ -821,7 +822,21 @@ def telemetry_summary(run_dir: Path) -> str:
         out += [f"market: {meta.get('market', '?')} · depth: {meta.get('depth', '?')} "
                 f"· status: {meta.get('status', '?')}",
                 f"cohort: {len(brands)} · accepted: {len(g['accepted'])} · "
-                f"rejected: {len(g['rejected'])} · pending research: {pending}", ""]
+                f"rejected: {len(g['rejected'])} · pending research: {pending}"]
+        # quality layer on top of the gate: complete vs accepted-with-gaps
+        if g["accepted"]:
+            schema_fields = [f["name"] for f in load_schema()["fields"]]
+            qs = [gate.record_quality(e["record"], schema_fields)
+                  for e in g["accepted"]]
+            complete = sum(1 for q in qs if q["status"] == "complete")
+            gaps = sum(1 for q in qs if q["missing"] or q["unresolved"])
+            low = sum(1 for q in qs if q["low_confidence"])
+            mand = sum(1 for q in qs if q["mandatory_gaps"])
+            avg_cov = round(sum(q["coverage_pct"] for q in qs) / len(qs))
+            out.append(f"quality of accepted: complete {complete} · with gaps {gaps} "
+                       f"(mandatory-field gaps {mand}) · with low-confidence "
+                       f"evidence {low} · avg field coverage {avg_cov}%")
+        out.append("")
     except Exception:
         out += ["(run state unavailable — events only)", ""]
 
@@ -862,7 +877,9 @@ def telemetry_summary(run_dir: Path) -> str:
                 s.get("_has_seconds") for s in stages.values()) else "")
             + f" · tool calls {tot['tool_calls']} · tokens {tokens_t}"
             + f" · failures {sum(s['failed'] for s in stages.values())}"
-            + f" · resumes {sum(s['resumed'] for s in stages.values())}"]
+            + f" · resumes {sum(s['resumed'] for s in stages.values())}"
+            + (f" · early stops {tot['early_stop']}" if tot["early_stop"] else "")
+            + (f" · budget extensions {tot['extended']} calls" if tot["extended"] else "")]
 
     # cost — only with configured pricing AND recorded usage
     try:
