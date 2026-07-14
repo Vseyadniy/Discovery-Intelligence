@@ -436,7 +436,8 @@ class App:
         self.goal_txt = tk.Text(frm, height=2, width=96, wrap="word")
         self.goal_txt.grid(row=1, column=0, columnspan=4, sticky="we", **pad)
 
-        ttk.Label(frm, text="Companies (gate-accepted) · confirm the angle per company",
+        ttk.Label(frm, text="Companies · run-backed (gate-accepted) and ✍ manual targets "
+                            "· confirm the angle per company",
                   font=("", 12, "bold")).grid(row=2, column=0, columnspan=4, sticky="w", **pad)
         self.qual_lb = tk.Listbox(frm, width=76, height=9, selectmode="extended")
         self.qual_lb.grid(row=3, column=0, columnspan=3, sticky="we", **pad)
@@ -452,12 +453,19 @@ class App:
                      values=list(onepager.ANGLES), width=17).grid(row=2, column=0, pady=2)
         ttk.Button(side, text="Set angle → selected", command=self.on_qual_set_angle).grid(
             row=3, column=0, sticky="we", pady=2)
-        ttk.Button(side, text="Start / update qual track", command=self.on_qual_start).grid(
+        # manual targets — coexist with run-backed rows (✍ marks them)
+        ttk.Button(side, text="➕ Add company…", command=self.on_qual_add_manual).grid(
             row=4, column=0, sticky="we", pady=(8, 2))
-        ttk.Label(side, text="One-pagers / step:").grid(row=5, column=0, sticky="w", pady=(6, 0))
+        ttk.Button(side, text="✎ Edit selected", command=self.on_qual_edit_manual).grid(
+            row=5, column=0, sticky="we", pady=2)
+        ttk.Button(side, text="✖ Remove selected", command=self.on_qual_remove).grid(
+            row=6, column=0, sticky="we", pady=2)
+        ttk.Button(side, text="Start / update qual track", command=self.on_qual_start).grid(
+            row=7, column=0, sticky="we", pady=(8, 2))
+        ttk.Label(side, text="One-pagers / step:").grid(row=8, column=0, sticky="w", pady=(6, 0))
         self.qual_batch = tk.IntVar(value=2)
         ttk.Spinbox(side, from_=1, to=4, textvariable=self.qual_batch, width=3).grid(
-            row=6, column=0, sticky="w")
+            row=9, column=0, sticky="w")
 
         # mode row — same pattern as tab 1
         ttk.Label(frm, text="Mode").grid(row=4, column=0, sticky="w", **pad)
@@ -564,7 +572,102 @@ class App:
     def _qual_render_list(self):
         self.qual_lb.delete(0, "end")
         for r in self.qual_rows:
-            self.qual_lb.insert("end", f"{r['brand']}  ·  {r['segment'] or '—'}  ·  angle: {r['angle']}")
+            mark = "✍ " if r.get("manual") else ""
+            self.qual_lb.insert("end", f"{mark}{r['brand']}  ·  {r['segment'] or '—'}"
+                                       f"  ·  angle: {r['angle']}")
+
+    def _qual_manual_dialog(self, initial=None):
+        """Modal form for a manual qual target: name + segment (+ notes)."""
+        top = tk.Toplevel(self.root)
+        top.title("Manual qual target")
+        top.transient(self.root)
+        top.grab_set()
+        out = {}
+        ttk.Label(top, text="Company name:").grid(row=0, column=0, sticky="w", padx=8, pady=4)
+        name_v = tk.StringVar(value=(initial or {}).get("brand", ""))
+        ttk.Entry(top, textvariable=name_v, width=38).grid(row=0, column=1, padx=8, pady=4)
+        ttk.Label(top, text="Market segment:").grid(row=1, column=0, sticky="w", padx=8, pady=4)
+        seg_v = tk.StringVar(value=(initial or {}).get("segment", ""))
+        ttk.Entry(top, textvariable=seg_v, width=38).grid(row=1, column=1, padx=8, pady=4)
+        ttk.Label(top, text="Notes (optional context\nyou know for sure):",
+                  justify="left").grid(row=2, column=0, sticky="nw", padx=8, pady=4)
+        notes_t = tk.Text(top, width=38, height=4, wrap="word")
+        notes_t.grid(row=2, column=1, padx=8, pady=4)
+        notes_t.insert("1.0", (initial or {}).get("notes", ""))
+        ttk.Label(top, text="Only what you enter here counts as KNOWN — everything\n"
+                            "else will be treated as unclear or hypothesis.",
+                  foreground="#666", justify="left").grid(
+            row=3, column=0, columnspan=2, sticky="w", padx=8)
+
+        def ok():
+            if not name_v.get().strip() or not seg_v.get().strip():
+                messagebox.showwarning("Missing", "Company name and segment are "
+                                                  "required.", parent=top)
+                return
+            out.update(brand=name_v.get().strip(), segment=seg_v.get().strip(),
+                       notes=notes_t.get("1.0", "end").strip())
+            top.destroy()
+        ttk.Button(top, text="Save", command=ok).grid(row=4, column=1, sticky="e",
+                                                      padx=8, pady=8)
+        top.wait_window()
+        return out or None
+
+    def on_qual_add_manual(self):
+        vals = self._qual_manual_dialog()
+        if not vals:
+            return
+        if any(runs._norm(r["brand"]) == runs._norm(vals["brand"]) for r in self.qual_rows):
+            messagebox.showinfo("Duplicate", f"«{vals['brand']}» is already in the list.")
+            return
+        if not self.run_dir:
+            # no past run selected — standalone qual-only container
+            self.run_dir = onepager.create_manual_run()
+            self.status.set(f"Created standalone qual run {self.run_dir.name} "
+                            f"for manual targets.")
+        self.qual_rows.append({"brand": vals["brand"], "segment": vals["segment"],
+                               "angle": self.angle_var.get(),
+                               "manual": {"segment": vals["segment"],
+                                          "notes": vals["notes"]}})
+        self._qual_render_list()
+
+    def on_qual_edit_manual(self):
+        sel = self.qual_lb.curselection()
+        if len(sel) != 1:
+            messagebox.showinfo("Edit", "Select exactly one row.")
+            return
+        row = self.qual_rows[sel[0]]
+        if not row.get("manual"):
+            messagebox.showinfo("Run-backed company",
+                                "This company comes from the quantitative run — its "
+                                "context is the verified record. Only the angle is "
+                                "editable («Set angle → selected»).")
+            return
+        vals = self._qual_manual_dialog(initial={"brand": row["brand"],
+                                                 "segment": row["manual"]["segment"],
+                                                 "notes": row["manual"].get("notes", "")})
+        if not vals:
+            return
+        if (runs._norm(vals["brand"]) != runs._norm(row["brand"]) and
+                any(runs._norm(r["brand"]) == runs._norm(vals["brand"])
+                    for r in self.qual_rows)):
+            messagebox.showinfo("Duplicate", f"«{vals['brand']}» is already in the list.")
+            return
+        if vals["brand"] != row["brand"] and self.run_dir:
+            onepager.remove_target(self.run_dir, row["brand"])   # renamed
+        row.update(brand=vals["brand"], segment=vals["segment"],
+                   manual={"segment": vals["segment"], "notes": vals["notes"]})
+        self._qual_render_list()
+
+    def on_qual_remove(self):
+        sel = list(self.qual_lb.curselection())
+        if not sel:
+            messagebox.showinfo("Remove", "Select the row(s) to remove.")
+            return
+        for i in reversed(sel):
+            row = self.qual_rows.pop(i)
+            if self.run_dir:
+                onepager.remove_target(self.run_dir, row["brand"])
+        self._qual_render_list()
 
     def on_qual_load(self):
         if not self.run_dir:
@@ -587,6 +690,22 @@ class App:
                     rows.append({"brand": e["entity"], "segment": seg, "angle": angle})
 
                 def done():
+                    # run-backed rows first, then saved manual targets from
+                    # qual_meta, then unsaved manual rows — deduped by name
+                    # (a run-backed record always wins over a manual duplicate)
+                    seen = {runs._norm(r["brand"]) for r in rows}
+                    for brand, info in (qmeta.get("companies") or {}).items():
+                        if (isinstance(info.get("manual"), dict)
+                                and runs._norm(brand) not in seen):
+                            rows.append({"brand": brand,
+                                         "segment": info["manual"].get("segment", ""),
+                                         "angle": info.get("angle", "competitor"),
+                                         "manual": info["manual"]})
+                            seen.add(runs._norm(brand))
+                    for r in getattr(self, "qual_rows", []) or []:
+                        if r.get("manual") and runs._norm(r["brand"]) not in seen:
+                            rows.append(r)
+                            seen.add(runs._norm(r["brand"]))
                     self.qual_rows = rows
                     self._qual_render_list()
                     goal = qmeta.get("research_goal", "")
@@ -614,7 +733,9 @@ class App:
         goal = self.goal_txt.get("1.0", "end").strip()
         try:
             onepager.setup(self.run_dir, goal,
-                           {r["brand"]: r["angle"] for r in self.qual_rows})
+                           {r["brand"]: r["angle"] for r in self.qual_rows},
+                           manual={r["brand"]: r["manual"] for r in self.qual_rows
+                                   if r.get("manual")})
             self.status.set(f"Qual track ready: {len(self.qual_rows)} companies — "
                             f"press Next qual prompt ▶")
             self._qual_refresh()

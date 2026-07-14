@@ -643,14 +643,17 @@ def run_next_qual_step(run_dir: Path, batch: int = 2, provider: str | None = Non
                          "select companies first.")
     q = onepager.gate_qual(run_dir)
     g = q["records_gate"]
-    rec_by_entity = {e["entity"]: e for e in g["accepted"]}
+    # run-backed records win; manual targets (user-provided context only)
+    # fill the gaps — same resolver as the prompt-mode path
+    rec_by_entity = onepager.target_entries(g, qmeta)
     qd = onepager.qual_dir(run_dir)
 
     if q["pending"]:
         todo = [b for b in q["pending"] if b in rec_by_entity][:batch]
         if not todo:
             raise SystemExit("Selected companies have no gate-accepted records — "
-                             "finish the quantitative repair loop first.")
+                             "finish the quantitative repair loop first (or add "
+                             "them as manual targets with their own context).")
         done, failed = [], []
         for n, brand in enumerate(todo, 1):
             e = rec_by_entity[brand]

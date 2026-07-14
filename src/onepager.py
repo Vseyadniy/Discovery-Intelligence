@@ -140,9 +140,12 @@ def save_meta(run_dir: Path, meta: dict) -> None:
         json.dumps(meta, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def setup(run_dir: Path, goal: str, angles: dict[str, str]) -> dict:
+def setup(run_dir: Path, goal: str, angles: dict[str, str],
+          manual: dict | None = None) -> dict:
     """Start (or update) the qual track: research goal + selected companies
-    with their confirmed angles ({brand: angle})."""
+    with their confirmed angles ({brand: angle}). `manual` carries the
+    user-provided context for manually added targets
+    ({brand: {"segment": …, "notes": …}}) — run-backed and manual coexist."""
     goal = goal.strip()
     if not goal:
         raise ValueError("research goal is required — it frames relevance, "
@@ -153,9 +156,77 @@ def setup(run_dir: Path, goal: str, angles: dict[str, str]) -> dict:
     meta = load_meta(run_dir)
     meta["research_goal"] = goal
     for brand, angle in angles.items():
-        meta["companies"][brand] = {**meta["companies"].get(brand, {}), "angle": angle}
+        entry = {**meta["companies"].get(brand, {}), "angle": angle}
+        if manual and brand in manual:
+            entry["manual"] = {"segment": str(manual[brand].get("segment", "")).strip(),
+                               "notes": str(manual[brand].get("notes", "")).strip()}
+        meta["companies"][brand] = entry
     save_meta(run_dir, meta)
     return meta
+
+
+def manual_entry(brand: str, manual: dict) -> dict:
+    """Gate-entry-shaped target built ONLY from user-provided context (name,
+    segment, optional notes). The synthetic record is explicitly marked
+    manual_target and is NEVER a substitute for a gate-verified quantitative
+    record — whatever the user did not state stays unclear / inference /
+    hypothesis territory, and the segment is context, not a company fact."""
+    fields = {}
+    if manual.get("segment"):
+        fields["segment"] = {"value": str(manual["segment"]).strip(),
+                             "source": "user-provided", "confidence": "high"}
+    if manual.get("notes"):
+        fields["user_notes"] = {"value": str(manual["notes"]).strip(),
+                                "source": "user-provided", "confidence": "high"}
+    record = {"entity": brand, "manual_target": True, "fields": fields,
+              "review_flags": ["manual target — добавлено вручную, без "
+                               "количественного исследования за записью"]}
+    return {"entity": brand, "stem": runs._slug(brand), "record": record,
+            "manual": True}
+
+
+def target_entries(g: dict, qmeta: dict) -> dict:
+    """brand → gate-entry for every selected qual target. A gate-ACCEPTED
+    quantitative record always wins over a manual entry with the same
+    (normalized) name — that is also the dedup rule; manual targets only fill
+    the gaps run data cannot cover."""
+    rec_by_entity = {e["entity"]: e for e in g["accepted"]}
+    by_norm = {runs._norm(e["entity"]): e for e in g["accepted"]}
+    out = {}
+    for brand, info in (qmeta.get("companies") or {}).items():
+        e = rec_by_entity.get(brand) or by_norm.get(runs._norm(brand))
+        if e is None and isinstance(info.get("manual"), dict):
+            e = manual_entry(brand, info["manual"])
+        if e is not None:
+            out[brand] = e
+    return out
+
+
+def remove_target(run_dir: Path, brand: str) -> None:
+    """Drop a company (run-backed or manual) from the qual track."""
+    meta = load_meta(run_dir)
+    if brand in meta.get("companies", {}):
+        meta["companies"].pop(brand)
+        save_meta(run_dir, meta)
+
+
+def create_manual_run(name: str = "manual qual targets") -> Path:
+    """Standalone container for qualitative research WITHOUT a quantitative
+    run: a minimal run dir whose gate has zero records, so every target added
+    to it is manual by construction."""
+    from datetime import datetime
+    run_id = f"{datetime.now().strftime('%Y-%m-%d_%H%M')}_{runs._slug(name)}_qual"
+    rd = runs.LOGS / run_id
+    (rd / "agent_runs").mkdir(parents=True, exist_ok=True)
+    schema = runs.load_schema()
+    meta = {"run_id": run_id, "market": name, "depth": "superficial",
+            "model": "chatgpt",
+            "output_language": schema.get("output_language", "Russian"),
+            "geo": schema.get("geo"), "status": "qual",
+            "created_at": runs._now(), "xlsx": None}
+    (rd / "run.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2),
+                                 encoding="utf-8")
+    return rd
 
 
 def propose_angle(rec: dict) -> str:
@@ -229,9 +300,17 @@ def build_qual_prompt(run_dir: Path, entries: list[dict], meta_run: dict,
     save = f"logs/{meta_run['run_id']}/qual"
     blocks = []
     for e in entries:
-        known, unclear = known_unclear(e["record"], schema_fields)
+        is_manual = bool(e["record"].get("manual_target"))
+        sf = schema_fields + ["user_notes"] if is_manual else schema_fields
+        known, unclear = known_unclear(e["record"], sf)
         angle = qmeta["companies"].get(e["entity"], {}).get("angle") or propose_angle(e["record"])
-        blocks.append(f"""### 🎯 {e['entity']}  — angle: **{angle}**
+        manual_note = ("""
+⚠️ MANUAL TARGET — no verified quantitative record exists for this company.
+KNOWN below is ONLY the user-provided context (name, segment, notes). Treat
+EVERYTHING else as unclear, inference or hypothesis — never as fact. Do not
+invent figures, and do not present the segment or market as company facts.
+""" if is_manual else "")
+        blocks.append(f"""### 🎯 {e['entity']}  — angle: **{angle}**{manual_note}
 Save to: `{save}/{e['stem']}_onepager.json` (`"entity"` must be exactly «{e['entity']}»)
 
 RECORD (the ONLY permitted fact base):
@@ -461,12 +540,12 @@ def _walk_texts(node, path="op"):
 def gate_qual(run_dir: Path) -> dict:
     """Validate all onepager JSONs against their records; render accepted ones."""
     g = runs.run_gate(run_dir, write_report=False)
-    rec_by_entity = {e["entity"]: e for e in g["accepted"]}
     qmeta = load_meta(run_dir)
+    targets = target_entries(g, qmeta)   # run-backed records win; manual fill gaps
     qd = qual_dir(run_dir)
     out = {"accepted": [], "rejected": [], "pending": [], "records_gate": g}
     for brand, info in qmeta.get("companies", {}).items():
-        rec_e = rec_by_entity.get(brand)
+        rec_e = targets.get(brand)
         op_path = _find_onepager(qd, brand)
         if op_path is None or rec_e is None:
             out["pending"].append(brand)
@@ -511,12 +590,13 @@ def next_qual_prompt(run_dir: Path, batch: int = 2) -> tuple[str, str]:
     meta_run = runs._load_meta(run_dir)
     q = gate_qual(run_dir)
     g = q["records_gate"]
-    rec_by_entity = {e["entity"]: e for e in g["accepted"]}
+    targets = target_entries(g, qmeta)
     if q["pending"]:
-        entries = [rec_by_entity[b] for b in q["pending"] if b in rec_by_entity][:batch]
+        entries = [targets[b] for b in q["pending"] if b in targets][:batch]
         if not entries:
             raise SystemExit("Selected companies have no gate-accepted records — "
-                             "finish the quant repair loop first.")
+                             "finish the quant repair loop first (or add them as "
+                             "manual targets with their own context).")
         kind, text = "qual-research", build_qual_prompt(run_dir, entries, meta_run, qmeta, g)
     elif q["rejected"]:
         kind, text = "qual-repair", _render_qual_repair(meta_run, qmeta, q["rejected"][:batch])
@@ -612,7 +692,10 @@ def render_md(op: dict, rec: dict, qmeta: dict, meta_run: dict) -> str:
         extra = "\n## 6 · Additional blocks\n" + "\n".join(
             f"\n**{k}**\n\n{v}\n" for k, v in cb.items())
 
-    return f"""# {op.get('entity', '?')} — Qualitative Research One-Pager
+    manual_mark = (" · ✍ manual target (context provided by the analyst, no "
+                   "quantitative research behind it)"
+                   if rec.get("manual_target") else "")
+    return f"""# {op.get('entity', '?')} — Qualitative Research One-Pager{manual_mark}
 
 **Angle:** {op.get('angle', '?')} · **Next step:** {ns.get('action', '?')} — {ns.get('why', '')}
 **Research goal:** {qmeta.get('research_goal', '')}
