@@ -486,6 +486,8 @@ class App:
             row=0, column=0, padx=4)
         ttk.Button(self.qual_prompt_btns, text="Next qual prompt ▶", command=self.on_qual_next).grid(
             row=0, column=1, padx=4)
+        ttk.Button(self.qual_prompt_btns, text="🔎 Find respondents",
+                   command=self.on_qual_respondents).grid(row=0, column=3, padx=4)
         ttk.Button(self.qual_prompt_btns, text="Open report", command=self.on_qual_report).grid(
             row=0, column=2, padx=4)
 
@@ -500,8 +502,10 @@ class App:
                                            postcommand=self._refresh_provider_labels)
         self.qual_model_box.grid(row=0, column=2, padx=2)
         self.qual_model_box.bind("<<ComboboxSelected>>", self._on_provider_picked)
+        ttk.Button(self.qual_api_btns, text="🔎 Find respondents  ⚡",
+                   command=self.on_qual_respondents).grid(row=0, column=3, padx=8)
         ttk.Button(self.qual_api_btns, text="Open report", command=self.on_qual_report).grid(
-            row=0, column=3, padx=8)
+            row=0, column=4, padx=8)
         self.qual_agent_lbl = ttk.Label(frm, text="", foreground="#0a6", wraplength=820,
                                         justify="left")
         self.qual_agent_lbl.grid(row=6, column=0, columnspan=4, sticky="w", **pad)
@@ -532,6 +536,50 @@ class App:
             self.qual_api_btns.grid_remove()
             self.qual_prompt_btns.grid()
             self.qual_agent_lbl.configure(text="")
+
+    def on_qual_respondents(self):
+        """Optional sourcing stage — Prompt mode shows the paste-prompt, API
+        mode runs it. Independent of the one-pager state machine."""
+        if not self.run_dir:
+            messagebox.showinfo("No run", "Load a run and start the qual track first.")
+            return
+        from src import respondents
+        if self.qual_mode.get() == "prompt":
+            try:
+                kind, text = respondents.next_respondent_prompt(
+                    self.run_dir, self.qual_batch.get())
+            except SystemExit as e:
+                messagebox.showinfo("Not ready", str(e))
+                return
+            self._show_qual(text)
+            self.root.clipboard_clear()
+            self.root.clipboard_append(text)
+            self.status.set(f"🔎 Respondent prompt ({kind}) copied — paste it into "
+                            f"ChatGPT with browsing, save the JSON, then press again.")
+            return
+        provider = self.provider.get()
+        self.qual_agent_lbl.configure(text=f"🔎 sourcing respondents ({provider})…")
+
+        def log(msg):
+            self.root.after(0, lambda: (self.qual_agent_lbl.configure(text=msg),
+                                        self.status.set(msg)))
+
+        def work():
+            try:
+                from src import api_runner
+                summary = api_runner.run_respondent_step(
+                    self.run_dir, self.qual_batch.get(), provider, log=log)
+
+                def done():
+                    self.qual_agent_lbl.configure(text=f"✔ {summary}")
+                    self.status.set(f"Respondents: {summary}")
+                    self._qual_refresh()
+                self.root.after(0, done)
+            except (SystemExit, Exception) as e:
+                self.root.after(0, lambda: (
+                    self.qual_agent_lbl.configure(text=f"✖ {e}"),
+                    messagebox.showwarning("Respondent sourcing failed", str(e))))
+        threading.Thread(target=work, daemon=True).start()
 
     def on_qual_api_step(self):
         if not self.run_dir:

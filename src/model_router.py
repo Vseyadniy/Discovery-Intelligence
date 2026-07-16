@@ -292,7 +292,7 @@ _DS_KEEP_FETCHES = 8      # newest fetched pages kept verbatim in the ~64k conte
 # evidence; conversely, a pass that stops finding anything new is finished
 # EARLY — agents are never pushed to exhaust a budget for its own sake.
 _STAGE_BUDGET_DEFAULTS = {"discovery": 20, "collector_a": 25,
-                          "collector_b": 25, "repair": 12}
+                          "collector_b": 25, "repair": 12, "respondents": 18}
 _DS_NOVELTY_WINDOW = 6    # executed calls with zero new URLs → evidence dried up
 
 

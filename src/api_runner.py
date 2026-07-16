@@ -712,14 +712,117 @@ def run_next_qual_step(run_dir: Path, batch: int = 2, provider: str | None = Non
             f"{onepager.report_path(run_dir).name}")
 
 
+_SYS_RESP = ("You are a sourcer on a market-intelligence pipeline, with web "
+             "search enabled. Find REAL named people from PUBLIC professional "
+             "sources only — never guess an email or include private contact "
+             "data. Open the pages you cite; verify roles are current. Return "
+             "STRICT JSON only — no prose around it.")
+
+
+def run_respondent_step(run_dir: Path, batch: int = 2, provider: str | None = None,
+                        log=print) -> str:
+    """Optional respondent-sourcing stage via API. Unlike one-pager design this
+    step BROWSES (mr.collect), and its output is validated by respondents.py —
+    the one-pager provenance rules are untouched."""
+    import time
+
+    from . import onepager, respondents
+    if provider:
+        mr.set_mode(provider)
+    meta_run = runs._load_meta(run_dir)
+    qmeta = onepager.load_meta(run_dir)
+    r = respondents.gate_respondents(run_dir)
+    q = r["qual"]
+    if not q["accepted"]:
+        raise SystemExit("Respondent sourcing needs accepted one-pagers — finish "
+                         "the qualitative track first.")
+    ops = {e["entity"]: e for e in q["accepted"]}
+    done, failed = [], []
+
+    def _one(label, stem, prompt, budget_stage="respondents"):
+        t0 = time.time()
+        try:
+            mr.reset_source_log()
+            raw, engine = mr.collect(
+                _SYS_RESP, prompt + "\n\n## API MODE OVERRIDE\nYou have no repo "
+                "access. Return ONLY the JSON object described above — no prose, "
+                "no file operations.",
+                16000, _ev(log, f"🔎 Respondents · {label}"),
+                budget=mr.stage_budget(budget_stage))
+            doc = mr.extract_json(raw)
+            grd = _ground(doc, log, f"Respondents · {label}")
+            _save(respondents.resp_path(run_dir, stem), doc)
+            runs._event(run_dir, "api_respondents", scope=label, engine=engine,
+                        candidates=len(doc.get("candidates") or []),
+                        seconds=int(time.time() - t0), **grd)
+            done.append(label)
+        except Exception as ex_err:
+            failed.append(f"{label} ({type(ex_err).__name__}: {str(ex_err)[:120]})")
+            runs._event(run_dir, "api_respondents_failed", scope=label,
+                        error=_err_for_event(ex_err),
+                        category=_error_category(ex_err),
+                        seconds=int(time.time() - t0), **_fail_stats())
+            log(f"[qual-api] respondents {label} FAILED — continuing")
+
+    if r["pending"]:
+        if "Market level" in r["pending"]:
+            log("[qual-api] sourcing market-level respondents…")
+            _one("Market level", respondents.MARKET_STEM,
+                 respondents.build_respondent_prompt(run_dir, q["accepted"],
+                                                     meta_run, qmeta, market=True))
+        else:
+            todo = [b for b in r["pending"] if b in ops][:max(1, int(batch))]
+            for brand in todo:
+                e = ops[brand]
+                log(f"[qual-api] sourcing respondents for {brand}…")
+                _one(brand, e["stem"],
+                     respondents.build_respondent_prompt(run_dir, [e], meta_run,
+                                                         qmeta, market=False))
+        summary = f"sourced {len(done)}: {', '.join(done) or '—'}"
+        if failed:
+            summary += f" · FAILED: {'; '.join(failed)} (press again to retry)"
+        if web_tools.QUOTA_EXHAUSTED:
+            summary += _QUOTA_SUMMARY
+        return summary + " — press again to continue"
+
+    if r["rejected"]:
+        for e in r["rejected"][:max(1, int(batch))]:
+            issues = [i for i in e["issues"] if i["severity"] == "reject"]
+            prompt = (
+                f"Repair ONE respondents file — {e['label']} "
+                f"(market: {meta_run['market']}).\nFailed checks:\n"
+                + "\n".join(f"- {i['field']} [{i['code']}]: {i['reason']}" for i in issues)
+                + "\n\nCurrent file:\n```json\n"
+                + json.dumps(e["doc"], ensure_ascii=False) + "\n```\n\n"
+                + respondents._RULES
+                + "\nFix ONLY the failed parts; keep every valid candidate as-is. "
+                + "Re-open sources where the role must be re-verified. "
+                + f"Prose in {meta_run['output_language']}. Return ONLY the corrected JSON.")
+            log(f"[qual-api] repair respondents {e['label']} ({len(issues)} issues)…")
+            _one(e["label"], e["stem"], prompt)
+        summary = f"repaired {len(done)}: {', '.join(done) or '—'}"
+        if failed:
+            summary += f" · FAILED: {'; '.join(failed)}"
+        return summary + " — press again to re-check"
+
+    if onepager.report_is_stale(run_dir):
+        onepager.build_report(run_dir)
+    n = sum(len(e["doc"].get("candidates") or []) for e in r["accepted"])
+    return (f"respondent sourcing complete — {n} candidates in "
+            f"{len(r['accepted'])} file(s); report refreshed")
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="Run the next research step via API.")
     ap.add_argument("run_id")
     ap.add_argument("--batch", type=int, default=3)
     ap.add_argument("--provider", choices=("gpt", "claude", "grok", "deepseek"), default=None)
     ap.add_argument("--qual", action="store_true", help="drive the qualitative track")
+    ap.add_argument("--respondents", action="store_true",
+                    help="drive the optional respondent-sourcing stage")
     args = ap.parse_args()
-    fn = run_next_qual_step if args.qual else run_next_step
+    fn = (run_respondent_step if args.respondents else
+          run_next_qual_step if args.qual else run_next_step)
     print(fn(runs.run_dir_for(args.run_id), args.batch, args.provider))
 
 

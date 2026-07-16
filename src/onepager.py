@@ -487,7 +487,9 @@ def validate_onepager(op: dict, rec: dict) -> list[dict]:
     for t in guide:
         if t.get("theme") not in THEMES:
             add(f"theme {t.get('theme')}", "reject", "bad-enum",
-                f"theme not in {THEMES}")
+                f"theme not in {THEMES} — RE-FILE its questions under one of "
+                f"those themes (merge into an existing block); do NOT delete "
+                f"them, the 10–15 total question count still applies")
         for q in t.get("questions") or []:
             for h in q.get("targets") or []:
                 if h not in hyp_ids:
@@ -757,8 +759,9 @@ def report_is_stale(run_dir: Path) -> bool:
     out = report_path(run_dir)
     if not out.exists():
         return True
-    newest = max((p.stat().st_mtime for p in qual_dir(run_dir).glob("*_onepager.json")),
-                 default=0)
+    newest = max((p.stat().st_mtime
+                  for pat in ("*_onepager.json", "*_respondents.json")
+                  for p in qual_dir(run_dir).glob(pat)), default=0)
     return newest > out.stat().st_mtime
 
 
@@ -824,6 +827,21 @@ def build_report(run_dir: Path) -> Path:
             if k and k not in seen:
                 seen.add(k)
                 p(r, style="List Bullet")
+
+    # optional respondent shortlist (only accepted sourcing files; absent when
+    # the optional stage was never run)
+    try:
+        from . import respondents as _resp
+        resp_docs = _resp.accepted_docs(run_dir)
+    except Exception:
+        resp_docs = {}
+    if resp_docs.get("market"):
+        doc.add_heading("Respondent shortlist — market level", 2)
+        p("Публичные профессиональные данные; контакт — только через публичный "
+          "профиль. Порядок: приоритет 1 → 3.", italic=True)
+        for c in sorted(resp_docs["market"].get("candidates") or [],
+                        key=lambda c: (c.get("priority", 9), c.get("name", ""))):
+            p(_resp.format_candidate(c), style="List Bullet")
 
     # ── one company per section ───────────────────────────────────────────────
     for e in ops:
@@ -893,9 +911,18 @@ def build_report(run_dir: Path) -> Path:
         for x in pri.get("risks") or []:
             p(x, style="List Bullet")
 
+        rd_doc = resp_docs.get(e["entity"])
+        if rd_doc:
+            doc.add_heading("6 · Respondent candidates (public professional data)", 2)
+            p("Названные кандидаты под архетипы из раздела 2; контакт — только "
+              "через публичный профиль.", italic=True)
+            for c in sorted(rd_doc.get("candidates") or [],
+                            key=lambda c: (c.get("priority", 9), c.get("name", ""))):
+                p(_resp.format_candidate(c), style="List Bullet")
+
         cb = op.get("custom_blocks") or {}
         if cb:
-            doc.add_heading("6 · Additional blocks", 2)
+            doc.add_heading("7 · Additional blocks" if rd_doc else "6 · Additional blocks", 2)
             for k, v in cb.items():
                 p(k, bold=True)
                 p(str(v))
