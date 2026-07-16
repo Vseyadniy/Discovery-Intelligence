@@ -750,6 +750,7 @@ _TELEMETRY_STAGES = {           # event name → stage label (+failed twin)
     "api_discovery": "discovery", "api_company": "research",
     "api_company_failed": "research", "api_repair": "repair",
     "api_repair_failed": "repair", "api_collector_b_rerun": "b-rerun",
+    "api_respondents": "respondents", "api_respondents_failed": "respondents",
 }
 _TELEMETRY_SUMS = ("seconds", "tool_calls", "searches", "fetches",
                    "search_denied", "budget_rounds", "requests",
@@ -811,12 +812,12 @@ def _telemetry_data(run_dir: Path) -> dict | None:
         passed_brands.setdefault(stage, set()).add(brand)
         if name == "api_repair" and brand:
             repair_brands[brand] = repair_brands.get(brand, 0) + 1
-            if "sig_after" in ev:
-                before = set(str(ev.get("sig", "")).split(",")) - {""}
-                after = set(str(ev.get("sig_after", "")).split(",")) - {""}
-                outcomes["cleared" if not after else
-                         "improved" if len(after) < len(before) else
-                         "no change"] += 1
+        if name in ("api_repair", "api_respondents") and "sig_after" in ev:
+            before = set(str(ev.get("sig", "")).split(",")) - {""}
+            after = set(str(ev.get("sig_after", "")).split(",")) - {""}
+            outcomes["cleared" if not after else
+                     "improved" if len(after) < len(before) else
+                     "no change"] += 1
         if ev.get("resumed"):
             s["resumed"] += 1
         if "tokens_in" in ev or "tokens_out" in ev:
@@ -889,7 +890,7 @@ def telemetry_summary(run_dir: Path) -> str:
     tot = {k: 0 for k in _TELEMETRY_SUMS}
     tot_flags = {"tokens": False, "seconds": False, "split": False}
     gap_notes = []
-    for stage in ("discovery", "research", "repair", "b-rerun"):
+    for stage in ("discovery", "research", "repair", "b-rerun", "respondents"):
         s = stages.get(stage)
         if not s:
             continue
@@ -965,6 +966,9 @@ def telemetry_summary(run_dir: Path) -> str:
                    + (" · outcomes: " + " / ".join(
                        f"{k} {v}" for k, v in d["outcomes"].most_common())
                       if d["outcomes"] else ""))
+    elif d["outcomes"]:   # respondent-only repairs still surface their outcomes
+        out.append("**Repair outcomes**: " + " / ".join(
+            f"{k} {v}" for k, v in d["outcomes"].most_common()))
     if d["autofixed"] or d["salvaged"]:
         out.append(f"**Local healing** (no API): autofixed fields "
                    f"{d['autofixed']} · salvaged fields {d['salvaged']}")

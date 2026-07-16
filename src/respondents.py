@@ -38,7 +38,16 @@ CONFIDENCE = ("high", "medium", "low")
 
 # Private contact data must never appear — the model may not guess an address.
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]{2,}")
-_PHONE_RE = re.compile(r"(?<!\d)(?:\+\d[\d\-.\s()]{8,}\d)(?!\d)")
+# obfuscated addresses: «ivanov (at) bank.ru», «ivanov [собака] bank точка ru»
+_EMAIL_OBFUSCATED_RE = re.compile(
+    r"[\w.+-]+\s*[\(\[{]\s*(?:at|собака|эт)\s*[\)\]}]\s*[\w-]+", re.I)
+# phones: international (+7 916 …), domestic 8-prefixed with separators
+# (8 916 123-45-67 / 8 (916) 123-45-67), and bare 11-digit 7/8-runs. The
+# look-arounds keep 10/12/13-digit registry numbers (ИНН/ОГРН) out of scope.
+_PHONE_RE = re.compile(
+    r"(?<!\d)(?:\+\d[\d\-.\s()]{8,}\d"
+    r"|8[\s(-]\(?\d{3}\)?[\s)-]\d{3}[\s-]?\d{2}[\s-]?\d{2}"
+    r"|[78]\d{10})(?!\d)")
 # Key TOKENS that would carry private data even if the value looks harmless.
 # Token-based (not substring): «addresses» — the hypotheses a person can speak
 # to — is legitimate, while «home_address» / «personal_phone» are not.
@@ -63,6 +72,49 @@ def _load(path: Path):
 
 def _norm_person(c: dict) -> str:
     return runs._norm(f"{c.get('name', '')}|{c.get('org', '')}")
+
+
+def ground_candidates(doc: dict, slog) -> list[str]:
+    """DeepSeek app-tools only: a candidate's profile_url and sources must be
+    URLs the pass actually saw (searched/fetched). Same philosophy as record
+    grounding: an ungrounded profile_url is BLANKED and ungrounded sources are
+    removed, so validate_respondents rejects the candidate as required-empty
+    and routes it into the repair loop; a domain-only match keeps the URL but
+    downgrades confidence. Returns detail strings (full URLs — event/debug
+    logs only, never persisted in the file)."""
+    from .web_tools import _norm
+    with slog._lock:
+        seen = set(slog.seen)
+    domains = {n.split("/", 1)[0] for n in seen}
+    details: list[str] = []
+    for c in doc.get("candidates") or []:
+        if not isinstance(c, dict):
+            continue
+        who = str(c.get("name") or "?")
+        u = str(c.get("profile_url") or "")
+        if u.startswith(("http://", "https://")):
+            n = _norm(u)
+            if n not in seen:
+                dom = n.split("/", 1)[0] if n else ""
+                if dom and dom in domains:
+                    c["confidence"] = "low"
+                    details.append(f"{who}: profile_url not opened this pass — "
+                                   f"confidence lowered ({u})")
+                else:
+                    c["profile_url"] = ""
+                    details.append(f"{who}: ungrounded profile_url removed ({u})")
+        srcs = c.get("sources")
+        if isinstance(srcs, list):
+            kept = []
+            for s in srcs:
+                s2 = str(s)
+                if s2.startswith(("http://", "https://")) and _norm(s2) in seen:
+                    kept.append(s)
+                else:
+                    details.append(f"{who}: ungrounded source removed ({s2[:80]})")
+            if len(kept) != len(srcs):
+                c["sources"] = kept
+    return details
 
 
 # ── validation (own rules — the one-pager gate is untouched) ──────────────────
@@ -91,6 +143,9 @@ def validate_respondents(doc: dict, hyp_ids: set[str], scope: str,
     for m in _PHONE_RE.findall(blob):
         add("_file", "reject", "private-contact",
             f"phone «{m.strip()}» — public professional data only")
+    for m in _EMAIL_OBFUSCATED_RE.findall(blob):
+        add("_file", "reject", "private-contact",
+            f"obfuscated email «{m.strip()[:40]}» — public professional data only")
 
     def walk_keys(node, path="doc"):
         if isinstance(node, dict):
@@ -355,6 +410,7 @@ def gate_respondents(run_dir: Path) -> dict:
     targets += [("company", e["stem"], ent, {h["id"] for h in _hyps(e["op"])})
                 for ent, e in sorted(ops.items())]
 
+    entries = []
     for scope, stem, label, hyp_ids in targets:
         p = resp_path(run_dir, stem)
         doc = _load(p)
@@ -363,10 +419,33 @@ def gate_respondents(run_dir: Path) -> dict:
             continue
         issues = validate_respondents(doc, hyp_ids, scope,
                                       entity="" if scope == "market" else label)
-        verdict = "rejected" if any(i["severity"] == "reject" for i in issues) else "accepted"
-        out[verdict].append({"label": label, "scope": scope, "stem": stem,
-                             "path": p, "doc": doc, "issues": issues,
-                             "verdict": verdict})
+        entries.append({"label": label, "scope": scope, "stem": stem,
+                        "path": p, "doc": doc, "issues": issues})
+
+    # cross-file dedup: one entry per person ACROSS market + company files —
+    # the earliest file (market first, then companies alphabetically) keeps
+    # the person; later files get a reject and go through repair
+    first_seen: dict[str, str] = {}
+    for e in entries:
+        for c in e["doc"].get("candidates") or []:
+            if not isinstance(c, dict):
+                continue
+            key = _norm_person(c)
+            if not key.strip("|"):
+                continue
+            owner = first_seen.setdefault(key, e["label"])
+            if owner != e["label"]:
+                e["issues"].append({
+                    "field": str(c.get("name") or "?"), "severity": "reject",
+                    "code": "duplicate",
+                    "reason": f"same person/org already listed in «{owner}» — "
+                              f"keep ONE entry per person across all files "
+                              f"(remove this one)"})
+
+    for e in entries:
+        e["verdict"] = ("rejected" if any(i["severity"] == "reject"
+                                          for i in e["issues"]) else "accepted")
+        out[e["verdict"]].append(e)
     return out
 
 

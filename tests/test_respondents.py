@@ -184,9 +184,10 @@ class TestPromptsAndGate(_QualRun):
             self.assertEqual(kind, "respondents-repair")
             self.assertIn("private-contact", text)
 
-            # fixed
+            # fixed — a DIFFERENT person than the market file (cross-file dedup)
             respondents.resp_path(self.rd, "directum").write_text(
-                json.dumps(_doc(), ensure_ascii=False), encoding="utf-8")
+                json.dumps(_doc(_cand(name="Пётр Петров", org="Directum")),
+                           ensure_ascii=False), encoding="utf-8")
             r = respondents.gate_respondents(self.rd)
             self.assertEqual(len(r["accepted"]), 2)
             self.assertEqual(r["pending"], [])
@@ -211,7 +212,8 @@ class TestPromptsAndGate(_QualRun):
                 encoding="utf-8")
             self.assertEqual(respondents.accepted_docs(self.rd), {})  # rejected → absent
             respondents.resp_path(self.rd, "directum").write_text(
-                json.dumps(_doc(), ensure_ascii=False), encoding="utf-8")
+                json.dumps(_doc(_cand(name="Пётр Петров", org="Directum")),
+                           ensure_ascii=False), encoding="utf-8")
             docs = respondents.accepted_docs(self.rd)
             self.assertIn("Directum", docs)
 

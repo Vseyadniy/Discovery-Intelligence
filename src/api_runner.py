@@ -165,6 +165,20 @@ _EVIDENCE_CODES = {"unsourced", "bad-source", "search-url",
                    "insignificant-news", "history-missing"}
 
 
+def _resp_repair_sigs(run_dir: Path, label: str) -> list[str]:
+    """Failure signatures of this file's past respondent REPAIR passes."""
+    out = []
+    try:
+        for line in (run_dir / "events.jsonl").read_text(encoding="utf-8").splitlines():
+            ev = json.loads(line)
+            if (ev.get("event") == "api_respondents" and ev.get("repair")
+                    and ev.get("scope") == label):
+                out.append(str(ev.get("sig", "")))
+    except Exception:
+        pass
+    return out
+
+
 def _repair_sigs(run_dir: Path, brand: str) -> list[str]:
     """Failure signatures of this brand's past record repairs (events.jsonl)."""
     out = []
@@ -737,9 +751,9 @@ def run_respondent_step(run_dir: Path, batch: int = 2, provider: str | None = No
         raise SystemExit("Respondent sourcing needs accepted one-pagers — finish "
                          "the qualitative track first.")
     ops = {e["entity"]: e for e in q["accepted"]}
-    done, failed = [], []
+    done, failed, manual = [], [], []
 
-    def _one(label, stem, prompt, budget_stage="respondents"):
+    def _one(label, stem, prompt, extra=None, validate_after=None):
         t0 = time.time()
         try:
             mr.reset_source_log()
@@ -748,13 +762,29 @@ def run_respondent_step(run_dir: Path, batch: int = 2, provider: str | None = No
                 "access. Return ONLY the JSON object described above — no prose, "
                 "no file operations.",
                 16000, _ev(log, f"🔎 Respondents · {label}"),
-                budget=mr.stage_budget(budget_stage))
+                budget=mr.stage_budget("respondents"))
             doc = mr.extract_json(raw)
+            # REAL grounding for respondent URLs (DeepSeek app tools): a
+            # profile/source URL the pass never saw is blanked/removed, so the
+            # validator rejects the candidate → repair re-researches it
+            gnotes = []
+            slog = mr.get_source_log()
+            if mr.MODE == "deepseek" and slog is not None:
+                gnotes = respondents.ground_candidates(doc, slog)
+                if gnotes:
+                    log(f"[grounding] Respondents · {label}: "
+                        f"{len(gnotes)} URL(s) stripped/flagged")
+                    for d in gnotes:
+                        log(f"[grounding]   {d}")
             grd = _ground(doc, log, f"Respondents · {label}")
+            if gnotes:
+                grd = {**grd, "grounding_affected": len(gnotes)}
             _save(respondents.resp_path(run_dir, stem), doc)
+            if validate_after is not None:   # repair effectiveness (sig_after)
+                grd = {**grd, "sig_after": validate_after(doc)}
             runs._event(run_dir, "api_respondents", scope=label, engine=engine,
                         candidates=len(doc.get("candidates") or []),
-                        seconds=int(time.time() - t0), **grd)
+                        seconds=int(time.time() - t0), **(extra or {}), **grd)
             done.append(label)
         except Exception as ex_err:
             failed.append(f"{label} ({type(ex_err).__name__}: {str(ex_err)[:120]})")
@@ -786,8 +816,33 @@ def run_respondent_step(run_dir: Path, batch: int = 2, provider: str | None = No
         return summary + " — press again to continue"
 
     if r["rejected"]:
+        all_hyps = {h["id"] for e in ops.values()
+                    for h in respondents._hyps(e["op"]) if h["id"]}
         for e in r["rejected"][:max(1, int(batch))]:
             issues = [i for i in e["issues"] if i["severity"] == "reject"]
+            # bounded, no-progress-aware repair (same guard as record repairs):
+            # 3 attempts, or two attempts leaving the identical failure set →
+            # stop; the file stays rejected and simply absent from the report
+            sig = ",".join(sorted(f"{i['field']}:{i['code']}" for i in issues))
+            sigs = _resp_repair_sigs(run_dir, e["label"])
+            if len(sigs) >= _REPAIR_LIMIT or sigs[-2:] == [sig, sig]:
+                msg = (f"{e['label']}: {len(sigs)} respondent repairs made no "
+                       f"progress on [{sig[:80]}] — manual review; the file "
+                       f"stays out of the report until fixed")
+                log(f"[qual-api] STOP · {msg}")
+                manual.append(msg)
+                continue
+            hyp_ids = (all_hyps if e["scope"] == "market" else
+                       {h["id"] for h in respondents._hyps(ops[e["label"]]["op"])}
+                       if e["label"] in ops else set())
+
+            def _validate_after(doc, _h=hyp_ids, _s=e["scope"], _l=e["label"]):
+                return ",".join(sorted(
+                    f"{i['field']}:{i['code']}"
+                    for i in respondents.validate_respondents(
+                        doc, _h, _s, entity="" if _s == "market" else _l)
+                    if i["severity"] == "reject"))
+
             prompt = (
                 f"Repair ONE respondents file — {e['label']} "
                 f"(market: {meta_run['market']}).\nFailed checks:\n"
@@ -799,10 +854,13 @@ def run_respondent_step(run_dir: Path, batch: int = 2, provider: str | None = No
                 + "Re-open sources where the role must be re-verified. "
                 + f"Prose in {meta_run['output_language']}. Return ONLY the corrected JSON.")
             log(f"[qual-api] repair respondents {e['label']} ({len(issues)} issues)…")
-            _one(e["label"], e["stem"], prompt)
+            _one(e["label"], e["stem"], prompt,
+                 extra={"repair": 1, "sig": sig}, validate_after=_validate_after)
         summary = f"repaired {len(done)}: {', '.join(done) or '—'}"
         if failed:
             summary += f" · FAILED: {'; '.join(failed)}"
+        if manual:
+            summary += f" · MANUAL REVIEW: {'; '.join(manual)}"
         return summary + " — press again to re-check"
 
     if onepager.report_is_stale(run_dir):
