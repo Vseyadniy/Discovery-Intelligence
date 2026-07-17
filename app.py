@@ -431,7 +431,8 @@ class App:
     # ══ tab 2 · qualitative research ═════════════════════════════════════════
     def _build_qual_tab(self, frm: ttk.Frame):
         pad = dict(padx=10, pady=4)
-        ttk.Label(frm, text="Research goal — what decision does this research serve?",
+        ttk.Label(frm, text="Research goal — what decision does this research serve? "
+                            "(required for one-pagers · optional for 🔎 Find respondents)",
                   font=("", 12, "bold")).grid(row=0, column=0, columnspan=4, sticky="w", **pad)
         self.goal_txt = tk.Text(frm, height=2, width=96, wrap="word")
         self.goal_txt.grid(row=1, column=0, columnspan=4, sticky="we", **pad)
@@ -542,16 +543,18 @@ class App:
             self.qual_prompt_btns.grid()
             self.qual_agent_lbl.configure(text="")
 
-    def _qual_persist(self) -> bool:
+    def _qual_persist(self, require_goal: bool = True) -> bool:
         """Save goal + selected targets/angles to qual_meta WITHOUT generating
         anything — shared by «Start / update qual track» and «Find respondents»
-        so the two stages stay independent."""
+        so the two stages stay independent. The goal is required for one-pagers
+        only; respondent sourcing persists targets without it."""
         goal = self.goal_txt.get("1.0", "end").strip()
         try:
             onepager.setup(self.run_dir, goal,
                            {r["brand"]: r["angle"] for r in self.qual_rows},
                            manual={r["brand"]: r["manual"] for r in self.qual_rows
-                                   if r.get("manual")})
+                                   if r.get("manual")},
+                           require_goal=require_goal)
             return True
         except ValueError as e:
             messagebox.showwarning("Cannot start", str(e))
@@ -565,8 +568,9 @@ class App:
             messagebox.showinfo("No targets", "Load a past run or add companies "
                                               "first — one-pagers are not required.")
             return
-        # persist goal + targets so sourcing works before «Start qual track»
-        if self.qual_rows and not self._qual_persist():
+        # persist targets (goal optional here) so sourcing works before
+        # «Start qual track» — the goal is only required for one-pagers
+        if self.qual_rows and not self._qual_persist(require_goal=False):
             return
         from src import respondents
         if self.qual_mode.get() == "prompt":

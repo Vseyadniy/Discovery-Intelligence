@@ -753,9 +753,9 @@ def run_respondent_step(run_dir: Path, batch: int = 2, provider: str | None = No
     targets = r.get("targets") or {e["entity"]: e for e in q["accepted"]}
     if not (targets or r["pending"] or r["rejected"] or r["accepted"]):
         raise SystemExit(
-            "Respondent sourcing needs at least one target — enter the research "
-            "goal and load a run / add companies first. Accepted one-pagers are "
-            "NOT required.")
+            "Respondent sourcing needs at least one target — load a run or add "
+            "companies first. The research goal is optional here; accepted "
+            "one-pagers are NOT required.")
     ops = {e["entity"]: e for e in q["accepted"]}
     done, failed, manual = [], [], []
 

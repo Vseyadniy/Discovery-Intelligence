@@ -338,7 +338,11 @@ def build_respondent_prompt(run_dir: Path, entries: list[dict], meta_run: dict,
     """entries = accepted one-pager entries (gate_qual output)."""
     lang = meta_run["output_language"]
     save = f"logs/{meta_run['run_id']}/qual"
-    goal = qmeta.get("research_goal", "")
+    # the goal is OPTIONAL for sourcing (required only for one-pagers): without
+    # it, relevance is judged by the market, the targets and their angles
+    goal = qmeta.get("research_goal", "") or (
+        "(not set — judge relevance by the market, the selected targets and "
+        "their angles below)")
     if market:
         _brands, _note, segments = runs.manifest(run_dir)
         ctx = []
@@ -661,9 +665,9 @@ def next_respondent_prompt(run_dir: Path, batch: int = 2) -> tuple[str, str]:
     targets = r["targets"]
     if not targets:
         raise SystemExit(
-            "Respondent sourcing needs at least one target — enter the research "
-            "goal and load a run / add companies first (tab «2 · Qualitative "
-            "research»). Accepted one-pagers are NOT required.")
+            "Respondent sourcing needs at least one target — load a run or add "
+            "companies first (tab «2 · Qualitative research»). The research "
+            "goal is optional here; accepted one-pagers are NOT required.")
 
     if r["pending"]:
         if "Market level" in r["pending"]:

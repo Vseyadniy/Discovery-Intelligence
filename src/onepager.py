@@ -141,20 +141,24 @@ def save_meta(run_dir: Path, meta: dict) -> None:
 
 
 def setup(run_dir: Path, goal: str, angles: dict[str, str],
-          manual: dict | None = None) -> dict:
+          manual: dict | None = None, require_goal: bool = True) -> dict:
     """Start (or update) the qual track: research goal + selected companies
     with their confirmed angles ({brand: angle}). `manual` carries the
     user-provided context for manually added targets
-    ({brand: {"segment": …, "notes": …}}) — run-backed and manual coexist."""
+    ({brand: {"segment": …, "notes": …}}) — run-backed and manual coexist.
+    `require_goal=False` persists targets WITHOUT a goal (respondent sourcing
+    only needs targets; one-pagers still require the goal — next_qual_prompt
+    enforces it). An empty goal never erases a previously saved one."""
     goal = goal.strip()
-    if not goal:
+    if not goal and require_goal:
         raise ValueError("research goal is required — it frames relevance, "
                          "hypotheses and the angle for every one-pager")
     bad = [a for a in angles.values() if a not in ANGLES]
     if bad:
         raise ValueError(f"unknown angle(s): {bad}; allowed: {ANGLES}")
     meta = load_meta(run_dir)
-    meta["research_goal"] = goal
+    if goal:
+        meta["research_goal"] = goal
     for brand, angle in angles.items():
         entry = {**meta["companies"].get(brand, {}), "angle": angle}
         if manual and brand in manual:

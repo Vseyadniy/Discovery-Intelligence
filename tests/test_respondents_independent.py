@@ -255,6 +255,66 @@ class TestContinuePartialRun(unittest.TestCase):
             self.assertIn(name, md)
 
 
+# ── the research goal is OPTIONAL for sourcing (required for one-pagers) ─────
+class TestGoalOptional(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.rd = _mkrun(self.tmp.name)
+
+    def test_setup_without_goal_persists_targets(self):
+        onepager.setup(self.rd, "", {"Directum": "competitor"},
+                       manual={"Directum": {"segment": "ECM/BPM"}},
+                       require_goal=False)
+        meta = onepager.load_meta(self.rd)
+        self.assertIn("Directum", meta["companies"])
+        self.assertEqual(meta["research_goal"], "")
+
+    def test_setup_without_goal_never_erases_a_saved_goal(self):
+        onepager.setup(self.rd, "выбрать вендора", {"Directum": "competitor"},
+                       manual={"Directum": {"segment": "ECM"}})
+        onepager.setup(self.rd, "", {"Directum": "customer"}, require_goal=False)
+        meta = onepager.load_meta(self.rd)
+        self.assertEqual(meta["research_goal"], "выбрать вендора")  # kept
+        self.assertEqual(meta["companies"]["Directum"]["angle"], "customer")
+
+    def test_onepager_track_still_requires_the_goal(self):
+        with self.assertRaises(ValueError):
+            onepager.setup(self.rd, "", {"Directum": "competitor"})   # default
+        onepager.setup(self.rd, "", {"Directum": "competitor"},
+                       manual={"Directum": {"segment": "ECM"}},
+                       require_goal=False)
+        with self.assertRaises(SystemExit):
+            onepager.next_qual_prompt(self.rd, 2)   # one-pagers still gated
+
+    def test_sourcing_prompts_work_without_a_goal(self):
+        onepager.setup(self.rd, "", {"Directum": "competitor"},
+                       manual={"Directum": {"segment": "ECM/BPM",
+                                            "notes": "переходят в облако"}},
+                       require_goal=False)
+        kind, text = respondents.next_respondent_prompt(self.rd, 2)
+        self.assertEqual(kind, "respondents-market")
+        self.assertIn("(not set — judge relevance", text)   # goal fallback
+        self.assertIn("ECM/BPM", text)                      # target context
+        _save_resp(self.rd, respondents.MARKET_STEM,
+                   {"scope": "market", "candidates": [_cand()]})
+        kind, text = respondents.next_respondent_prompt(self.rd, 2)
+        self.assertEqual(kind, "respondents-company")
+        self.assertIn("(not set — judge relevance", text)
+        self.assertIn("переходят в облако", text)
+
+    def test_gate_and_privacy_rules_unchanged_without_goal(self):
+        onepager.setup(self.rd, "", {"Directum": "competitor"},
+                       manual={"Directum": {"segment": "ECM"}},
+                       require_goal=False)
+        _save_resp(self.rd, respondents.MARKET_STEM,
+                   {"scope": "market",
+                    "candidates": [_cand(contact_route="ivanov@bank.ru")]})
+        r = respondents.gate_respondents(self.rd)
+        codes = {i["code"] for e in r["rejected"] for i in e["issues"]}
+        self.assertIn("private-contact", codes)   # privacy net still applies
+
+
 # ── API mode is equally independent of one-pagers ────────────────────────────
 class TestApiWithoutOnePagers(unittest.TestCase):
     def test_market_sourcing_runs_and_completes_without_onepagers(self):
