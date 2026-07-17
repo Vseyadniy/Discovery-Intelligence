@@ -156,7 +156,10 @@ class TestBoundedRepairAndTelemetry(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             rd = Path(td)
             (rd / "qual").mkdir()
-            good = {"scope": "market", "candidates": [_cand()]}
+            # theme address: the qual state here has no hypotheses, and invented
+            # H* ids are now rejected (orphan-ref) even pre-one-pager
+            good = {"scope": "market",
+                    "candidates": [_cand(addresses=["buying_behavior"])]}
 
             def ok(*a, **k):
                 return json.dumps(good, ensure_ascii=False), "eng"

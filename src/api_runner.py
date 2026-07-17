@@ -735,9 +735,12 @@ _SYS_RESP = ("You are a sourcer on a market-intelligence pipeline, with web "
 
 def run_respondent_step(run_dir: Path, batch: int = 2, provider: str | None = None,
                         log=print) -> str:
-    """Optional respondent-sourcing stage via API. Unlike one-pager design this
-    step BROWSES (mr.collect), and its output is validated by respondents.py —
-    the one-pager provenance rules are untouched."""
+    """Optional respondent-sourcing stage via API — INDEPENDENT of the
+    one-pager track: it needs targets (run-backed or manual), not accepted
+    one-pagers, which only refine the shortlist once they exist. Unlike
+    one-pager design this step BROWSES (mr.collect), and its output is
+    validated by respondents.py — the one-pager provenance rules are
+    untouched."""
     import time
 
     from . import onepager, respondents
@@ -747,13 +750,17 @@ def run_respondent_step(run_dir: Path, batch: int = 2, provider: str | None = No
     qmeta = onepager.load_meta(run_dir)
     r = respondents.gate_respondents(run_dir)
     q = r["qual"]
-    if not q["accepted"]:
-        raise SystemExit("Respondent sourcing needs accepted one-pagers — finish "
-                         "the qualitative track first.")
+    targets = r.get("targets") or {e["entity"]: e for e in q["accepted"]}
+    if not (targets or r["pending"] or r["rejected"] or r["accepted"]):
+        raise SystemExit(
+            "Respondent sourcing needs at least one target — enter the research "
+            "goal and load a run / add companies first. Accepted one-pagers are "
+            "NOT required.")
     ops = {e["entity"]: e for e in q["accepted"]}
     done, failed, manual = [], [], []
 
-    def _one(label, stem, prompt, extra=None, validate_after=None):
+    def _one(label, stem, prompt, extra=None, validate_after=None,
+             merge_with=None):
         t0 = time.time()
         try:
             mr.reset_source_log()
@@ -779,6 +786,11 @@ def run_respondent_step(run_dir: Path, batch: int = 2, provider: str | None = No
             grd = _ground(doc, log, f"Respondents · {label}")
             if gnotes:
                 grd = {**grd, "grounding_affected": len(gnotes)}
+            # refine/rerun: merge AFTER grounding — previously accepted
+            # candidates keep their (already validated) URLs; the new pass
+            # wins for people it re-sourced, nobody is silently discarded
+            if merge_with is not None:
+                doc = respondents.merge_candidates(merge_with, doc)
             _save(respondents.resp_path(run_dir, stem), doc)
             if validate_after is not None:   # repair effectiveness (sig_after)
                 grd = {**grd, "sig_after": validate_after(doc)}
@@ -797,13 +809,14 @@ def run_respondent_step(run_dir: Path, batch: int = 2, provider: str | None = No
     if r["pending"]:
         if "Market level" in r["pending"]:
             log("[qual-api] sourcing market-level respondents…")
+            entries = sorted(targets.values(), key=lambda e: e["entity"])
             _one("Market level", respondents.MARKET_STEM,
-                 respondents.build_respondent_prompt(run_dir, q["accepted"],
+                 respondents.build_respondent_prompt(run_dir, entries,
                                                      meta_run, qmeta, market=True))
         else:
-            todo = [b for b in r["pending"] if b in ops][:max(1, int(batch))]
+            todo = [b for b in r["pending"] if b in targets][:max(1, int(batch))]
             for brand in todo:
-                e = ops[brand]
+                e = targets[brand]
                 log(f"[qual-api] sourcing respondents for {brand}…")
                 _one(brand, e["stem"],
                      respondents.build_respondent_prompt(run_dir, [e], meta_run,
@@ -816,7 +829,7 @@ def run_respondent_step(run_dir: Path, batch: int = 2, provider: str | None = No
         return summary + " — press again to continue"
 
     if r["rejected"]:
-        all_hyps = {h["id"] for e in ops.values()
+        all_hyps = {h["id"] for e in targets.values()
                     for h in respondents._hyps(e["op"]) if h["id"]}
         for e in r["rejected"][:max(1, int(batch))]:
             issues = [i for i in e["issues"] if i["severity"] == "reject"]
@@ -833,8 +846,9 @@ def run_respondent_step(run_dir: Path, batch: int = 2, provider: str | None = No
                 manual.append(msg)
                 continue
             hyp_ids = (all_hyps if e["scope"] == "market" else
-                       {h["id"] for h in respondents._hyps(ops[e["label"]]["op"])}
-                       if e["label"] in ops else set())
+                       {h["id"] for h in respondents._hyps(targets[e["label"]]["op"])
+                        if h["id"]}
+                       if e["label"] in targets else set())
 
             def _validate_after(doc, _h=hyp_ids, _s=e["scope"], _l=e["label"]):
                 return ",".join(sorted(
@@ -863,11 +877,26 @@ def run_respondent_step(run_dir: Path, batch: int = 2, provider: str | None = No
             summary += f" · MANUAL REVIEW: {'; '.join(manual)}"
         return summary + " — press again to re-check"
 
-    if onepager.report_is_stale(run_dir):
+    if r.get("refine"):
+        for e in r["refine"][:max(1, int(batch))]:
+            log(f"[qual-api] refining respondents {e['label']} against the "
+                f"newly accepted one-pager(s)…")
+            _one(e["label"], e["stem"],
+                 respondents._render_refine(run_dir, meta_run, [e], targets),
+                 extra={"refine": 1}, merge_with=e["doc"])
+        summary = f"refined {len(done)}: {', '.join(done) or '—'}"
+        if failed:
+            summary += f" · FAILED: {'; '.join(failed)} (press again to retry)"
+        return summary + " — press again to re-check"
+
+    if q["accepted"] and onepager.report_is_stale(run_dir):
         onepager.build_report(run_dir)
     n = sum(len(e["doc"].get("candidates") or []) for e in r["accepted"])
     return (f"respondent sourcing complete — {n} candidates in "
-            f"{len(r['accepted'])} file(s); report refreshed")
+            f"{len(r['accepted'])} file(s); "
+            + ("report refreshed" if q["accepted"] else
+               f"shortlist: qual/{respondents.shortlist_path(run_dir).name} "
+               f"(the one-pager track stays optional)"))
 
 
 def main() -> None:

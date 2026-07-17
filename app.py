@@ -460,12 +460,16 @@ class App:
             row=5, column=0, sticky="we", pady=2)
         ttk.Button(side, text="✖ Remove selected", command=self.on_qual_remove).grid(
             row=6, column=0, sticky="we", pady=2)
-        ttk.Button(side, text="Start / update qual track", command=self.on_qual_start).grid(
+        # respondent sourcing is INDEPENDENT of the one-pager track: available
+        # as soon as goal + targets exist, before (or instead of) Start
+        ttk.Button(side, text="🔎 Find respondents", command=self.on_qual_respondents).grid(
             row=7, column=0, sticky="we", pady=(8, 2))
-        ttk.Label(side, text="One-pagers / step:").grid(row=8, column=0, sticky="w", pady=(6, 0))
+        ttk.Button(side, text="Start / update qual track", command=self.on_qual_start).grid(
+            row=8, column=0, sticky="we", pady=2)
+        ttk.Label(side, text="One-pagers / step:").grid(row=9, column=0, sticky="w", pady=(6, 0))
         self.qual_batch = tk.IntVar(value=2)
         ttk.Spinbox(side, from_=1, to=4, textvariable=self.qual_batch, width=3).grid(
-            row=9, column=0, sticky="w")
+            row=10, column=0, sticky="w")
 
         # mode row — same pattern as tab 1
         ttk.Label(frm, text="Mode").grid(row=4, column=0, sticky="w", **pad)
@@ -486,8 +490,6 @@ class App:
             row=0, column=0, padx=4)
         ttk.Button(self.qual_prompt_btns, text="Next qual prompt ▶", command=self.on_qual_next).grid(
             row=0, column=1, padx=4)
-        ttk.Button(self.qual_prompt_btns, text="🔎 Find respondents",
-                   command=self.on_qual_respondents).grid(row=0, column=3, padx=4)
         ttk.Button(self.qual_prompt_btns, text="Open report", command=self.on_qual_report).grid(
             row=0, column=2, padx=4)
 
@@ -502,10 +504,8 @@ class App:
                                            postcommand=self._refresh_provider_labels)
         self.qual_model_box.grid(row=0, column=2, padx=2)
         self.qual_model_box.bind("<<ComboboxSelected>>", self._on_provider_picked)
-        ttk.Button(self.qual_api_btns, text="🔎 Find respondents  ⚡",
-                   command=self.on_qual_respondents).grid(row=0, column=3, padx=8)
         ttk.Button(self.qual_api_btns, text="Open report", command=self.on_qual_report).grid(
-            row=0, column=4, padx=8)
+            row=0, column=3, padx=8)
         self.qual_agent_lbl = ttk.Label(frm, text="", foreground="#0a6", wraplength=820,
                                         justify="left")
         self.qual_agent_lbl.grid(row=6, column=0, columnspan=4, sticky="w", **pad)
@@ -518,12 +518,17 @@ class App:
         self.qual_eta_lbl.grid(row=0, column=1, sticky="w", padx=10)
         self.qual_lbl = ttk.Label(frm, text="—")
         self.qual_lbl.grid(row=8, column=0, columnspan=4, sticky="w", **pad)
+        # independent status of the optional respondent-sourcing stage
+        self.resp_lbl = ttk.Label(
+            frm, foreground="#666",
+            text="🔎 Respondents (optional, independent of one-pagers): —")
+        self.resp_lbl.grid(row=9, column=0, columnspan=4, sticky="w", **pad)
 
-        self.qual_txt = tk.Text(frm, height=13, width=96, wrap="word")
-        self.qual_txt.grid(row=9, column=0, columnspan=4, sticky="nsew", **pad)
+        self.qual_txt = tk.Text(frm, height=12, width=96, wrap="word")
+        self.qual_txt.grid(row=10, column=0, columnspan=4, sticky="nsew", **pad)
         self.qual_txt.configure(state="disabled")
         frm.columnconfigure(0, weight=1)
-        frm.rowconfigure(9, weight=1)
+        frm.rowconfigure(10, weight=1)
         self.qual_rows: list[dict] = []
         self._refresh_provider_labels()   # fill the picker created above
         self._apply_qual_mode()
@@ -537,11 +542,31 @@ class App:
             self.qual_prompt_btns.grid()
             self.qual_agent_lbl.configure(text="")
 
+    def _qual_persist(self) -> bool:
+        """Save goal + selected targets/angles to qual_meta WITHOUT generating
+        anything — shared by «Start / update qual track» and «Find respondents»
+        so the two stages stay independent."""
+        goal = self.goal_txt.get("1.0", "end").strip()
+        try:
+            onepager.setup(self.run_dir, goal,
+                           {r["brand"]: r["angle"] for r in self.qual_rows},
+                           manual={r["brand"]: r["manual"] for r in self.qual_rows
+                                   if r.get("manual")})
+            return True
+        except ValueError as e:
+            messagebox.showwarning("Cannot start", str(e))
+            return False
+
     def on_qual_respondents(self):
-        """Optional sourcing stage — Prompt mode shows the paste-prompt, API
-        mode runs it. Independent of the one-pager state machine."""
+        """Optional sourcing stage — INDEPENDENT of the one-pager track: needs
+        goal + targets (run-backed or manual), NOT one-pagers. Prompt mode
+        shows the paste-prompt, API mode runs it."""
         if not self.run_dir:
-            messagebox.showinfo("No run", "Load a run and start the qual track first.")
+            messagebox.showinfo("No targets", "Load a past run or add companies "
+                                              "first — one-pagers are not required.")
+            return
+        # persist goal + targets so sourcing works before «Start qual track»
+        if self.qual_rows and not self._qual_persist():
             return
         from src import respondents
         if self.qual_mode.get() == "prompt":
@@ -778,17 +803,10 @@ class App:
         if not self.run_dir or not self.qual_rows:
             messagebox.showinfo("Nothing selected", "Load companies first.")
             return
-        goal = self.goal_txt.get("1.0", "end").strip()
-        try:
-            onepager.setup(self.run_dir, goal,
-                           {r["brand"]: r["angle"] for r in self.qual_rows},
-                           manual={r["brand"]: r["manual"] for r in self.qual_rows
-                                   if r.get("manual")})
+        if self._qual_persist():
             self.status.set(f"Qual track ready: {len(self.qual_rows)} companies — "
-                            f"press Next qual prompt ▶")
+                            f"press Next qual prompt ▶ (or 🔎 Find respondents)")
             self._qual_refresh()
-        except ValueError as e:
-            messagebox.showwarning("Cannot start", str(e))
 
     def on_qual_next(self):
         if not self.run_dir:
@@ -844,6 +862,14 @@ class App:
             self.qual_lbl.configure(
                 text=f"{p['accepted']}/{p['selected']} one-pagers accepted · "
                      f"{p['rejected']} rejected · {p['phase']}")
+        except Exception:
+            pass
+        try:
+            from src import respondents
+            rp = respondents.progress(self.run_dir)
+            self.resp_lbl.configure(
+                text=f"🔎 Respondents (optional, independent of one-pagers): "
+                     f"{rp['phase']}")
         except Exception:
             pass
 
