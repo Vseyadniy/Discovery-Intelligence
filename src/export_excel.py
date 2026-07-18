@@ -298,6 +298,51 @@ def write_csv(headers: list[str], rows: list[dict], path: Path) -> None:
     print(f"[csv] wrote {len(rows)} rows → {path} (Airtable-ready)")
 
 
+_RESP_WIDTHS = {"target": 22, "name": 22, "role": 30, "org": 24,
+                "why_relevant": 46, "priority": 8, "telegram": 20, "phone": 18,
+                "email": 26, "linkedin": 30, "profile_url": 34, "sources": 40,
+                "confidence": 12, "verified_on": 14}
+
+
+def write_respondents_sheet(path: Path, headers: list[str], rows: list[dict]) -> None:
+    """Add or refresh a «Respondents» sheet. If the workbook already exists
+    (the quantitative deliverable), the sheet joins it; otherwise a new
+    workbook is created with «Respondents» as its first sheet (manual-only
+    flow). Existing sheets are preserved; a stale «Respondents» is replaced."""
+    from openpyxl import Workbook, load_workbook
+    from openpyxl.styles import Alignment, Font, PatternFill
+    from openpyxl.utils import get_column_letter
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if path.exists():
+        wb = load_workbook(path)
+        if "Respondents" in wb.sheetnames:
+            del wb["Respondents"]
+        ws = wb.create_sheet("Respondents", 0 if not wb.sheetnames else None)
+    else:
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Respondents"
+
+    header_fill = PatternFill("solid", fgColor="2E7D32")
+    header_font = Font(bold=True, color="FFFFFF")
+    wrap_top = Alignment(wrap_text=True, vertical="top")
+    ws.append(headers)
+    for ci, name in enumerate(headers, start=1):
+        c = ws.cell(row=1, column=ci)
+        c.fill, c.font = header_fill, header_font
+        c.alignment = Alignment(wrap_text=True, vertical="center")
+        ws.column_dimensions[get_column_letter(ci)].width = _RESP_WIDTHS.get(name, 20)
+    for r in rows:
+        ws.append([r.get(h, "") for h in headers])
+        for ci in range(1, len(headers) + 1):
+            ws.cell(row=ws.max_row, column=ci).alignment = wrap_top
+    ws.freeze_panes = "A2"
+    ws.auto_filter.ref = f"A1:{get_column_letter(len(headers))}{ws.max_row}"
+    wb.save(path)
+    print(f"[xlsx] Respondents sheet: {len(rows)} rows → {path}")
+
+
 def write_xlsx(headers: list[str], rows: list[dict], out: Path) -> None:
     from openpyxl import Workbook
     from openpyxl.styles import Alignment, Font, PatternFill

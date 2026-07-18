@@ -47,7 +47,16 @@ MARKET_STEM = "_market"
 PRIORITIES = (1, 2, 3)
 CONFIDENCE = ("high", "medium", "low")
 
-# Private contact data must never appear — the model may not guess an address.
+# The deliverable is an outreach list, so PUBLISHED professional contact
+# channels are allowed — but ONLY inside each candidate's `contacts` object,
+# never in free-text fields, and only when copied verbatim from a public
+# professional source (the model may never infer an address, username or
+# number). Preferred acquisition order: telegram → phone → email → linkedin.
+CONTACT_KEYS = ("telegram", "phone", "email", "linkedin")
+_TELEGRAM_RE = re.compile(r"^(?:@[\w]{4,}|https?://t\.me/(?:s/)?[\w/]{4,})$", re.I)
+_LINKEDIN_RE = re.compile(r"^https?://([\w-]+\.)?linkedin\.com/", re.I)
+
+# Private contact data must never appear OUTSIDE the contacts object.
 _EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+\.[\w.]{2,}")
 # obfuscated addresses: «ivanov (at) bank.ru», «ivanov [собака] bank точка ru»
 _EMAIL_OBFUSCATED_RE = re.compile(
@@ -178,13 +187,25 @@ def autofix_doc(doc: dict) -> list[str]:
         if isinstance(pr, (int, float)) and pr not in PRIORITIES:
             c["priority"] = min(max(int(pr), 1), 3)
             notes.append(f"{who}: priority {pr} → {c['priority']}")
-        for k in [k for k in c
-                  if set(re.split(r"[^a-zа-яё]+", str(k).lower())) - {""}
+        # top-level channel keys belong nested under `contacts` — migrate a
+        # valid value there rather than dropping it, else remove the stray key
+        contacts = c.get("contacts") if isinstance(c.get("contacts"), dict) else {}
+        for k in [k for k in c if k != "contacts"
+                  and set(re.split(r"[^a-zа-яё]+", str(k).lower())) - {""}
                   & _BANNED_KEY_TOKENS]:
+            val = str(c.get(k) or "").strip()
+            for ch, rx in (("email", _EMAIL_RE), ("telegram", _TELEGRAM_RE),
+                           ("linkedin", _LINKEDIN_RE), ("phone", _PHONE_RE)):
+                if not contacts.get(ch) and (rx.fullmatch(val) or rx.search(val)):
+                    contacts[ch] = val
+                    notes.append(f"{who}: moved «{k}» → contacts.{ch}")
+                    break
             c.pop(k, None)
-            notes.append(f"{who}: removed private-data key «{k}»")
+        if contacts:
+            c["contacts"] = contacts
         for k, v in list(c.items()):
-            if not isinstance(v, str) or v.startswith(("http://", "https://")):
+            if k == "contacts" or not isinstance(v, str) \
+                    or v.startswith(("http://", "https://")):
                 continue
             cleaned = _EMAIL_RE.sub("", v)
             cleaned = _PHONE_RE.sub("", cleaned)
@@ -224,29 +245,36 @@ def validate_respondents(doc: dict, hyp_ids: set[str], scope: str,
         add("entity", "reject", "bad-enum",
             f"entity «{doc.get('entity')}» — expected «{entity}»")
 
-    # private data anywhere in the payload (values AND keys)
-    blob = json.dumps(doc, ensure_ascii=False)
+    # contact data is allowed ONLY inside each candidate's `contacts` object;
+    # scan everything ELSE (a copy with contacts stripped) for leaks
+    scrub = dict(doc)
+    scrub["candidates"] = [{k: v for k, v in c.items() if k != "contacts"}
+                           if isinstance(c, dict) else c
+                           for c in (doc.get("candidates") or [])]
+    blob = json.dumps(scrub, ensure_ascii=False)
     for m in _EMAIL_RE.findall(blob):
         add("_file", "reject", "private-contact",
-            f"email «{m}» — public professional data only; emails are never guessed")
+            f"email «{m}» outside `contacts` — put published channels in `contacts` only")
     for m in _PHONE_RE.findall(blob):
         add("_file", "reject", "private-contact",
-            f"phone «{m.strip()}» — public professional data only")
+            f"phone «{m.strip()}» outside `contacts` — put published channels in `contacts` only")
     for m in _EMAIL_OBFUSCATED_RE.findall(blob):
         add("_file", "reject", "private-contact",
             f"obfuscated email «{m.strip()[:40]}» — public professional data only")
 
-    def walk_keys(node, path="doc"):
+    def walk_keys(node, path="doc", in_contacts=False):
         if isinstance(node, dict):
             for k, v in node.items():
-                tokens = set(re.split(r"[^a-zа-яё]+", str(k).lower())) - {""}
-                if tokens & _BANNED_KEY_TOKENS:
-                    add(f"{path}.{k}", "reject", "private-contact",
-                        f"field «{k}» may carry private contact data — remove it")
-                walk_keys(v, f"{path}.{k}")
+                if not in_contacts:
+                    tokens = set(re.split(r"[^a-zа-яё]+", str(k).lower())) - {""}
+                    if tokens & _BANNED_KEY_TOKENS:
+                        add(f"{path}.{k}", "reject", "private-contact",
+                            f"field «{k}» outside `contacts` — nest published "
+                            f"channels under `contacts` instead")
+                walk_keys(v, f"{path}.{k}", in_contacts or k == "contacts")
         elif isinstance(node, list):
             for i, v in enumerate(node):
-                walk_keys(v, f"{path}[{i}]")
+                walk_keys(v, f"{path}[{i}]", in_contacts)
     walk_keys(doc)
 
     cands = doc.get("candidates")
@@ -332,6 +360,42 @@ def validate_respondents(doc: dict, hyp_ids: set[str], scope: str,
         if conf == "low":
             add(f"{label}", "warn", "low-confidence",
                 "low confidence — verify the role before reaching out")
+
+        # published professional contact channels (all optional, format-checked;
+        # a channel present with no source to back it is not defensible)
+        contacts = c.get("contacts") or {}
+        if contacts and not isinstance(contacts, dict):
+            add(f"{label}.contacts", "reject", "bad-json", "`contacts` must be an object")
+            contacts = {}
+        stray = [k for k in contacts if k not in CONTACT_KEYS]
+        if stray:
+            add(f"{label}.contacts", "reject", "bad-enum",
+                f"unknown contact channel(s) {stray} — use only {CONTACT_KEYS}")
+        has_channel = False
+        for ch in CONTACT_KEYS:
+            v = str(contacts.get(ch) or "").strip()
+            if not v:
+                continue
+            has_channel = True
+            if ch == "email" and not _EMAIL_RE.fullmatch(v):
+                add(f"{label}.contacts.email", "reject", "bad-contact",
+                    f"«{v}» is not a valid email — copy it verbatim from a public page")
+            elif ch == "phone" and not _PHONE_RE.search(v):
+                add(f"{label}.contacts.phone", "reject", "bad-contact",
+                    f"«{v}» is not a recognizable phone number")
+            elif ch == "telegram" and not _TELEGRAM_RE.match(v):
+                add(f"{label}.contacts.telegram", "reject", "bad-contact",
+                    f"«{v}» — use a public @handle or https://t.me/… link")
+            elif ch == "linkedin" and not _LINKEDIN_RE.match(v):
+                add(f"{label}.contacts.linkedin", "reject", "bad-contact",
+                    f"«{v}» is not a linkedin.com profile URL")
+        if has_channel and not (c.get("sources") or []):
+            add(f"{label}.contacts", "reject", "unsourced",
+                "contact channels present but no `sources` back them — cite the "
+                "public page each channel was published on")
+        if not has_channel:
+            add(f"{label}", "warn", "no-channel",
+                "no usable public contact channel found — profile_url is the only route")
     return issues
 
 
@@ -372,24 +436,31 @@ def _no_op_guidance(entries: list[dict]) -> str:
 
 
 _RULES = """
-## Hard rules — public professional data ONLY
-- **NO email addresses and NO phone numbers ANYWHERE in the JSON** — not
-  personal, not corporate, not PR/press (`pr@…`, `info@…`), not guessed, not
-  even ones printed on a public page. The `contact_route` is a text
-  description of a PUBLIC route (e.g. «через форму на профиле», «через
-  пресс-службу»), never an address. `profile_url` is a URL you actually
-  opened. A single «@…» or phone number voids the whole file.
-- Only real, named people you found on public sources. No invented people, no
-  «Head of X (name unknown)» placeholders.
-- **Verify the role is current**: open the profile/company page, confirm the
-  person still holds the stated role, and put the date you checked in
-  `verified_on` (ISO YYYY-MM-DD). If you cannot confirm it today, drop them.
-- One entry per person: no duplicates within or across the two groups.
-- `sources` = the pages that support role + relevance (never search pages).
-- `confidence`: high = profile + a second corroborating source, both current;
-  medium = single solid public source; low = indirect evidence (say why).
-- `addresses` = the hypothesis ids (H*) / themes this person can actually speak
-  to. Prefer few strong candidates over a long weak list.
+## Goal — an OUTREACH-READY list: named people + how to reach them
+Spend your budget on finding USABLE PUBLIC CONTACT CHANNELS, not biographies.
+Keep `why_relevant` to one short line. For EACH candidate, after you confirm
+the person, do a small bounded contact search in this order and STOP as soon
+as you have one or two usable channels:
+  1. Telegram  2. public professional phone  3. public professional email
+  4. LinkedIn / other professional profile
+
+## Hard rules — PUBLISHED professional contacts only, never inferred
+- Put every contact ONLY inside the candidate's `contacts` object
+  ({telegram, phone, email, linkedin}). Never place an address, number or
+  handle in name/role/why_relevant/note — that voids the file.
+- Include a channel ONLY if it is **explicitly published on a public
+  professional source you opened** (personal/company site, speaker/author
+  page, verified social profile). **Never infer or construct** an email
+  pattern, a username, or a phone number. If it is not published, leave it out.
+- No `pr@…`/`info@…` generic inboxes as a person's contact, and no private
+  numbers. When unsure, omit the channel — a profile_url alone is fine.
+- Every candidate with any channel must cite in `sources` the page(s) the
+  channel was published on.
+- Only real, named people; verify the role is CURRENT (open the page, put the
+  check date in `verified_on`, ISO YYYY-MM-DD) — drop anyone you cannot
+  confirm today. One entry per person, no duplicates across files.
+- `confidence`: high = profile + a corroborating source; medium = single
+  solid source; low = indirect (say why). `addresses` = H* ids / themes.
 """
 
 _SHAPE = """```json
@@ -398,17 +469,21 @@ _SHAPE = """```json
  "candidates": [
    {"name": "Иван Иванов",
     "role": "Директор по цифровизации", "org": "…",
-    "why_relevant": "…why THIS person for the research goal / angle…",
+    "why_relevant": "…one short line: why THIS person…",
     "addresses": ["H1", "buying_behavior"],
     "priority": 1,
-    "profile_url": "https://…  (public professional page = the contact route)",
-    "contact_route": "…how to reach out publicly, e.g. «через форму на профиле»…",
-    "sources": ["https://…", "https://…"],
+    "profile_url": "https://…  (public professional page)",
+    "contacts": {"telegram": "@handle or https://t.me/handle",
+                 "phone": "+7 … (only if publicly published)",
+                 "email": "name@org.ru (only if publicly published)",
+                 "linkedin": "https://linkedin.com/in/…"},
+    "sources": ["https://…  (page that published the role + contacts)"],
     "confidence": "high",
     "role_current": true,
     "verified_on": "YYYY-MM-DD"}],
  "note": "…blockers, if any…"}
-```"""
+```
+Omit any `contacts` channel you could not find published — never guess it."""
 
 
 def build_respondent_prompt(run_dir: Path, entries: list[dict], meta_run: dict,
@@ -800,6 +875,9 @@ def progress(run_dir: Path) -> dict:
     r = gate_respondents(run_dir)
     a, rej, p = len(r["accepted"]), len(r["rejected"]), len(r["pending"])
     n = sum(len(e["doc"].get("candidates") or []) for e in r["accepted"])
+    contacts = sum(1 for e in r["accepted"]
+                   for c in (e["doc"].get("candidates") or [])
+                   if (c.get("contacts") or {}))
     phase = ("not started — set the goal and load/add targets "
              "(one-pagers NOT required)" if not r["targets"] else
              f"sourcing ({p} to go)" if p else
@@ -808,7 +886,7 @@ def progress(run_dir: Path) -> dict:
              if r["refine"] else
              f"done — {n} candidates")
     return {"accepted": a, "rejected": rej, "pending": p, "candidates": n,
-            "refine": len(r["refine"]), "phase": phase}
+            "contacts": contacts, "refine": len(r["refine"]), "phase": phase}
 
 
 # ── report helpers (consumed by onepager.build_report) ───────────────────────
@@ -822,10 +900,71 @@ def accepted_docs(run_dir: Path) -> dict:
     return out
 
 
+def contact_channels(c: dict) -> str:
+    """«telegram: @x · phone: … · email: …» — published channels only."""
+    ct = c.get("contacts") or {}
+    return " · ".join(f"{k}: {ct[k]}" for k in CONTACT_KEYS if ct.get(k))
+
+
 def format_candidate(c: dict) -> str:
     """One-line rendering shared by the .docx report and the markdown pages."""
     addr = ", ".join(str(a) for a in (c.get("addresses") or []))
+    ch = contact_channels(c)
     return (f"[P{c.get('priority', '?')}·{c.get('confidence', '?')}] "
             f"{c.get('name', '?')} — {c.get('role', '')}, {c.get('org', '')} · "
             f"{c.get('why_relevant', '')} · addresses: {addr} · "
-            f"{c.get('profile_url', '')} · проверено {c.get('verified_on', '?')}")
+            + (f"contacts: {ch} · " if ch else "")
+            + f"{c.get('profile_url', '')} · проверено {c.get('verified_on', '?')}")
+
+
+# ── outreach Excel deliverable ────────────────────────────────────────────────
+RESP_COLUMNS = ["target", "name", "role", "org", "why_relevant", "priority",
+                "telegram", "phone", "email", "linkedin", "profile_url",
+                "sources", "confidence", "verified_on"]
+
+
+def contact_rows(run_dir: Path) -> list[dict]:
+    """Flat outreach rows from ACCEPTED respondent files (market + companies,
+    incl. manual-only targets). One row per candidate, priority-sorted."""
+    r = gate_respondents(run_dir)
+    rows = []
+    for e in sorted(r["accepted"], key=lambda e: (e["scope"] != "market", e["label"])):
+        target = "Market" if e["scope"] == "market" else e["label"]
+        for c in sorted(e["doc"].get("candidates") or [],
+                        key=lambda c: (c.get("priority") or 9, str(c.get("name", "")))):
+            ct = c.get("contacts") or {}
+            rows.append({
+                "target": target, "name": c.get("name", ""),
+                "role": c.get("role", ""), "org": c.get("org", ""),
+                "why_relevant": str(c.get("why_relevant", ""))[:200],
+                "priority": c.get("priority", ""),
+                "telegram": ct.get("telegram", ""), "phone": ct.get("phone", ""),
+                "email": ct.get("email", ""), "linkedin": ct.get("linkedin", ""),
+                "profile_url": c.get("profile_url", ""),
+                "sources": " ; ".join(str(s) for s in (c.get("sources") or [])),
+                "confidence": c.get("confidence", ""),
+                "verified_on": c.get("verified_on", "")})
+    return rows
+
+
+def contacts_xlsx_path(run_dir: Path) -> Path:
+    """The quant workbook if it exists (we add a sheet), else a standalone
+    workbook whose FIRST sheet is Respondents (manual-only flow)."""
+    meta = runs._load_meta(run_dir)
+    xlsx = meta.get("xlsx")
+    if xlsx and Path(xlsx).exists():
+        return Path(xlsx)
+    return run_dir / f"{runs.deliverable_name(meta)}.xlsx"
+
+
+def build_contacts_xlsx(run_dir: Path) -> Path | None:
+    """Write/refresh the «Respondents» sheet. Returns the workbook path, or
+    None when no accepted candidates exist yet."""
+    from . import export_excel as xl
+    rows = contact_rows(run_dir)
+    if not rows:
+        return None
+    out = contacts_xlsx_path(run_dir)
+    xl.write_respondents_sheet(out, RESP_COLUMNS, rows)
+    runs._event(run_dir, "respondents_xlsx", rows=len(rows), path=str(out))
+    return out

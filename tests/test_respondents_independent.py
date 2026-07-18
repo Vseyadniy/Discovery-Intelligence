@@ -348,7 +348,7 @@ class TestApiWithoutOnePagers(unittest.TestCase):
             self.assertIn("sourced 1: Market level", s1)
             self.assertIn("sourced 1: Directum", s2)
             self.assertIn("respondent sourcing complete", s3)
-            self.assertIn("respondents_shortlist", s3)   # no .docx report needed
+            self.assertIn("Respondents sheet", s3)   # outreach Excel is the deliverable
             self.assertTrue(respondents.shortlist_path(rd).exists())
 
 

@@ -149,7 +149,7 @@ class TestPromptsAndGate(_QualRun):
         co = respondents.build_respondent_prompt(self.rd, [self.entry], meta_run,
                                                  self.qmeta, market=False)
         for text in (mk, co):
-            self.assertIn("NO email addresses and NO phone numbers", text)
+            self.assertIn("PUBLISHED professional contacts only, never inferred", text)
             self.assertIn("verified_on", text)
             self.assertIn("выбрать вендора", text)          # research goal
             self.assertIn("H1", text)                       # hypotheses

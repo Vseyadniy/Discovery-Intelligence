@@ -224,7 +224,7 @@ class TestApiPendingPath(unittest.TestCase):
 
             def collect(system, user, max_tokens=16000, on_event=None, **kw):
                 self.assertIn("MARKET level", user)          # market goes first
-                self.assertIn("NO email addresses", user)
+                self.assertIn("PUBLISHED professional contacts", user)
                 return json.dumps(returned, ensure_ascii=False), "eng"
 
             with patch.object(api_runner.runs, "_load_meta",

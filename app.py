@@ -515,31 +515,40 @@ class App:
         self.qual_eta_lbl.grid(row=0, column=1, sticky="w", padx=10)
         self.qual_lbl = ttk.Label(frm, text="—")
         self.qual_lbl.grid(row=8, column=0, columnspan=4, sticky="w", **pad)
-        # ── Respondent sourcing — its own stage, own buttons, own status ──
+        # ══ Respondent sourcing — a SEPARATE stage: build an outreach contact
+        #    list. Simple step navigation, no long explanations. ══════════════
+        ttk.Separator(frm, orient="horizontal").grid(
+            row=9, column=0, columnspan=4, sticky="we", pady=(10, 2))
         rs = ttk.Frame(frm)
-        rs.grid(row=9, column=0, columnspan=4, sticky="we", **pad)
-        ttk.Label(rs, text="🔎 Respondent sourcing (optional · independent of one-pagers)",
-                  font=("", 12, "bold")).grid(row=0, column=0, columnspan=4, sticky="w")
-        ttk.Button(rs, text="Next respondent prompt ▶",
-                   command=self.on_resp_next_prompt).grid(row=1, column=0, padx=(0, 4), pady=2)
-        ttk.Button(rs, text="Find respondents  ⚡",
-                   command=self.on_qual_respondents).grid(row=1, column=1, padx=4, pady=2)
-        ttk.Button(rs, text="Open shortlist",
-                   command=self.on_resp_shortlist).grid(row=1, column=2, padx=4, pady=2)
-        self.resp_lbl = ttk.Label(rs, foreground="#666", wraplength=820,
-                                  justify="left", text="status: —")
-        self.resp_lbl.grid(row=2, column=0, columnspan=4, sticky="w")
+        rs.grid(row=10, column=0, columnspan=4, sticky="we", **pad)
+        ttk.Label(rs, text="🔎 Respondent sourcing → outreach contact list",
+                  font=("", 13, "bold")).grid(row=0, column=0, columnspan=5, sticky="w")
+        ttk.Label(rs, text="Step 1 — find people + published contacts:").grid(
+            row=1, column=0, sticky="w", pady=2)
+        ttk.Button(rs, text="⚡ Find respondents",
+                   command=self.on_qual_respondents).grid(row=1, column=1, padx=4)
+        ttk.Button(rs, text="▶ Prompt (manual)",
+                   command=self.on_resp_next_prompt).grid(row=1, column=2, padx=4)
+        ttk.Label(rs, text="Step 2 — get the list:").grid(
+            row=2, column=0, sticky="w", pady=2)
+        ttk.Button(rs, text="📇 Open Excel", command=self.on_resp_excel).grid(
+            row=2, column=1, padx=4)
+        ttk.Button(rs, text="Shortlist (md)", command=self.on_resp_shortlist).grid(
+            row=2, column=2, padx=4)
+        self.resp_lbl = ttk.Label(rs, foreground="#046", wraplength=820,
+                                  justify="left", text="targets —")
+        self.resp_lbl.grid(row=3, column=0, columnspan=5, sticky="w", pady=(4, 0))
 
         # stage banner: which stage & prompt the big text area currently shows
-        self.qual_stage_lbl = ttk.Label(frm, text="📋 Nothing shown yet — press a "
-                                        "«Next … prompt ▶» button.",
+        self.qual_stage_lbl = ttk.Label(frm, text="📋 Prompt area — press a step "
+                                        "button above to fill it.",
                                         font=("", 12, "bold"), foreground="#046")
-        self.qual_stage_lbl.grid(row=10, column=0, columnspan=4, sticky="w", **pad)
-        self.qual_txt = tk.Text(frm, height=18, width=96, wrap="word")
-        self.qual_txt.grid(row=11, column=0, columnspan=4, sticky="nsew", **pad)
+        self.qual_stage_lbl.grid(row=11, column=0, columnspan=4, sticky="w", **pad)
+        self.qual_txt = tk.Text(frm, height=22, width=104, wrap="word")
+        self.qual_txt.grid(row=12, column=0, columnspan=4, sticky="nsew", **pad)
         self.qual_txt.configure(state="disabled")
         frm.columnconfigure(0, weight=1)
-        frm.rowconfigure(11, weight=1)
+        frm.rowconfigure(12, weight=1)
         self.qual_rows: list[dict] = []
         self._refresh_provider_labels()   # fill the picker created above
         self._apply_qual_mode()
@@ -609,6 +618,31 @@ class App:
             messagebox.showinfo("No shortlist yet",
                                 "No respondent files validated yet — run "
                                 "«Find respondents» or the prompt flow first.")
+
+    def on_resp_excel(self):
+        """Build/refresh the outreach «Respondents» sheet and open the workbook."""
+        from src import respondents
+        if not self.run_dir:
+            messagebox.showinfo("No targets", "Load a run or add companies first.")
+            return
+        self.status.set("Building the outreach Excel (Respondents sheet)…")
+
+        def work():
+            try:
+                out = respondents.build_contacts_xlsx(self.run_dir)
+                if out is None:
+                    self.root.after(0, lambda: messagebox.showinfo(
+                        "No contacts yet", "No accepted respondents yet — run "
+                        "«Find respondents» first."))
+                    return
+                self.root.after(0, lambda: (open_path(out),
+                                            self.status.set(f"Opened {out.name} "
+                                                            f"(Respondents sheet)"),
+                                            self._qual_refresh()))
+            except Exception as e:
+                self.root.after(0, lambda: messagebox.showwarning(
+                    "Excel build failed", str(e)))
+        threading.Thread(target=work, daemon=True).start()
 
     def on_qual_respondents(self):
         """Respondent sourcing via API ⚡ — one step per press (source → repair
@@ -911,7 +945,8 @@ class App:
             from src import respondents
             rp = respondents.progress(self.run_dir)
             self.resp_lbl.configure(
-                text=f"🔎 Respondents (optional, independent of one-pagers): "
+                text=f"targets {rp['accepted']}✓ / {rp['rejected']}✗ / "
+                     f"{rp['pending']}⏳ · contacts found: {rp['contacts']} · "
                      f"{rp['phase']}")
         except Exception:
             pass

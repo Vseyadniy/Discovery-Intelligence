@@ -1078,6 +1078,13 @@ def build_excel(run_dir: Path) -> Path:
     _save_meta(run_dir, meta)
     _event(run_dir, "built_excel", rows=len(rows), rejected=len(g["rejected"]),
            xlsx=str(xlsx_out))
+    # write_xlsx creates a fresh workbook — re-attach the Respondents sheet so a
+    # quant rebuild after respondent sourcing keeps both in the one workbook
+    try:
+        from . import respondents
+        respondents.build_contacts_xlsx(run_dir)
+    except Exception:
+        pass
     return xlsx_out
 
 

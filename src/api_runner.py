@@ -900,11 +900,10 @@ def run_respondent_step(run_dir: Path, batch: int = 2, provider: str | None = No
     if q["accepted"] and onepager.report_is_stale(run_dir):
         onepager.build_report(run_dir)
     n = sum(len(e["doc"].get("candidates") or []) for e in r["accepted"])
+    xlsx = respondents.build_contacts_xlsx(run_dir)   # outreach-ready deliverable
     return (f"respondent sourcing complete — {n} candidates in "
-            f"{len(r['accepted'])} file(s); "
-            + ("report refreshed" if q["accepted"] else
-               f"shortlist: qual/{respondents.shortlist_path(run_dir).name} "
-               f"(the one-pager track stays optional)"))
+            f"{len(r['accepted'])} file(s)"
+            + (f"; Excel: {xlsx.name} (Respondents sheet)" if xlsx else ""))
 
 
 def main() -> None:
