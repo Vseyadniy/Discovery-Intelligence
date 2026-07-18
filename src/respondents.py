@@ -94,6 +94,24 @@ def _norm_person(c: dict) -> str:
     return runs._norm(f"{c.get('name', '')}|{c.get('org', '')}")
 
 
+def _contact_token(ch: str, val: str) -> str:
+    """The identifying token to search for in fetched page text: last 10 phone
+    digits, the telegram/linkedin vanity, or the lowercased email."""
+    v = str(val or "").strip().lower()
+    if ch == "phone":
+        d = re.sub(r"\D", "", v)
+        return d[-10:] if len(d) >= 10 else ""
+    if ch in ("telegram", "linkedin"):
+        return v.rstrip("/").rsplit("/", 1)[-1].lstrip("@")
+    return v
+
+
+# generic role/department mailboxes — never a person's professional contact
+_GENERIC_LOCALPARTS = {"info", "pr", "press", "sales", "support", "help",
+                       "contact", "hello", "office", "admin", "mail", "media",
+                       "marketing", "hr", "reception", "team", "welcome"}
+
+
 def ground_candidates(doc: dict, slog, prev_doc: dict | None = None) -> list[str]:
     """DeepSeek app-tools only: a candidate's profile_url and sources must be
     URLs the pass actually saw (searched/fetched). Same philosophy as record
@@ -111,44 +129,64 @@ def ground_candidates(doc: dict, slog, prev_doc: dict | None = None) -> list[str
     from .web_tools import _norm
     with slog._lock:
         seen = set(slog.seen)
+        page_text = " ".join(slog.fetched.values()).lower()
+    page_digits = re.sub(r"\D", "", page_text)
     domains = {n.split("/", 1)[0] for n in seen}
-    prev_urls = {}
+    prev = {}
     if isinstance(prev_doc, dict):
-        prev_urls = {_norm_person(c): str(c.get("profile_url") or "")
-                     for c in prev_doc.get("candidates") or []
-                     if isinstance(c, dict)}
+        prev = {_norm_person(c): c for c in prev_doc.get("candidates") or []
+                if isinstance(c, dict)}
     details: list[str] = []
     for c in doc.get("candidates") or []:
-        if (isinstance(c, dict)
-                and prev_urls.get(_norm_person(c)) == str(c.get("profile_url") or "")
-                and _norm_person(c) in prev_urls):
-            continue   # unchanged person — grounded in their original pass
         if not isinstance(c, dict):
             continue
         who = str(c.get("name") or "?")
-        u = str(c.get("profile_url") or "")
-        if u.startswith(("http://", "https://")):
-            n = _norm(u)
-            if n not in seen:
-                dom = n.split("/", 1)[0] if n else ""
-                if dom and dom in domains:
-                    c["confidence"] = "low"
-                    details.append(f"{who}: profile_url not opened this pass — "
-                                   f"confidence lowered ({u})")
-                else:
-                    c["profile_url"] = ""
-                    details.append(f"{who}: ungrounded profile_url removed ({u})")
-        srcs = c.get("sources")
-        if isinstance(srcs, list):
-            kept = []
-            for s in srcs:
-                s2 = str(s)
-                if s2.startswith(("http://", "https://")) and _norm(s2) in seen:
-                    kept.append(s)
-                else:
-                    details.append(f"{who}: ungrounded source removed ({s2[:80]})")
-            if len(kept) != len(srcs):
-                c["sources"] = kept
+        pc = prev.get(_norm_person(c)) or {}
+        url_unchanged = (_norm_person(c) in prev
+                         and str(pc.get("profile_url") or "") == str(c.get("profile_url") or ""))
+
+        # URL grounding — skipped only when the profile_url is unchanged since a
+        # prior (already-grounded) pass; contact grounding below is per-channel
+        if not url_unchanged:
+            u = str(c.get("profile_url") or "")
+            if u.startswith(("http://", "https://")):
+                n = _norm(u)
+                if n not in seen:
+                    dom = n.split("/", 1)[0] if n else ""
+                    if dom and dom in domains:
+                        c["confidence"] = "low"
+                        details.append(f"{who}: profile_url not opened this pass — "
+                                       f"confidence lowered ({u})")
+                    else:
+                        c["profile_url"] = ""
+                        details.append(f"{who}: ungrounded profile_url removed ({u})")
+            srcs = c.get("sources")
+            if isinstance(srcs, list):
+                kept = [s for s in srcs if str(s).startswith(("http://", "https://"))
+                        and _norm(str(s)) in seen]
+                for s in srcs:
+                    if s not in kept:
+                        details.append(f"{who}: ungrounded source removed ({str(s)[:80]})")
+                if len(kept) != len(srcs):
+                    c["sources"] = kept
+
+        # CONTACT grounding — each channel value must actually appear in a page
+        # the pass FETCHED, not merely sit next to some cited URL. Unchanged
+        # channels (verbatim same as the prior pass) are trusted; new/changed
+        # ones must be supported by fetched text or they are dropped.
+        contacts = c.get("contacts")
+        if isinstance(contacts, dict):
+            prev_ct = pc.get("contacts") or {}
+            for ch in list(contacts):
+                val = str(contacts.get(ch) or "").strip()
+                if not val or (prev_ct.get(ch) == contacts.get(ch)):
+                    continue   # unchanged channel — grounded when first sourced
+                tok = _contact_token(ch, val)
+                blob = page_digits if ch == "phone" else page_text
+                if not tok or tok not in blob:
+                    contacts.pop(ch, None)
+                    details.append(f"{who}: ungrounded {ch} removed — not found in "
+                                   f"any fetched page ({val})")
     return details
 
 
@@ -380,6 +418,9 @@ def validate_respondents(doc: dict, hyp_ids: set[str], scope: str,
             if ch == "email" and not _EMAIL_RE.fullmatch(v):
                 add(f"{label}.contacts.email", "reject", "bad-contact",
                     f"«{v}» is not a valid email — copy it verbatim from a public page")
+            elif ch == "email" and v.split("@", 1)[0].lower() in _GENERIC_LOCALPARTS:
+                add(f"{label}.contacts.email", "reject", "bad-contact",
+                    f"«{v}» is a generic role mailbox, not this person's address")
             elif ch == "phone" and not _PHONE_RE.search(v):
                 add(f"{label}.contacts.phone", "reject", "bad-contact",
                     f"«{v}» is not a recognizable phone number")

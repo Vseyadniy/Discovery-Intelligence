@@ -333,8 +333,15 @@ def write_respondents_sheet(path: Path, headers: list[str], rows: list[dict]) ->
         c.fill, c.font = header_fill, header_font
         c.alignment = Alignment(wrap_text=True, vertical="center")
         ws.column_dimensions[get_column_letter(ci)].width = _RESP_WIDTHS.get(name, 20)
+    def _safe(v):
+        # neutralize spreadsheet formula injection: a cell text beginning with
+        # = + - @ is executed by Excel/Sheets — respondent names/roles come from
+        # web pages, so prefix such values with a zero-width guard apostrophe
+        s = "" if v is None else str(v)
+        return "'" + s if s[:1] in ("=", "+", "-", "@") else s
+
     for r in rows:
-        ws.append([r.get(h, "") for h in headers])
+        ws.append([_safe(r.get(h, "")) for h in headers])
         for ci in range(1, len(headers) + 1):
             ws.cell(row=ws.max_row, column=ci).alignment = wrap_top
     ws.freeze_panes = "A2"

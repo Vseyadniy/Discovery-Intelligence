@@ -142,9 +142,88 @@ class TestManualOnlyDeliverable(unittest.TestCase):
                 wb = load_workbook(out)
                 self.assertEqual(wb.sheetnames, ["Respondents"])   # no quant sheet
                 vals = [c.value for c in wb["Respondents"][2]]
-                self.assertIn("@pp_bpm", vals)                     # channel present
+                self.assertIn("'@pp_bpm", vals)                    # channel present (formula-guarded)
                 self.assertIn("Новая Ко", vals)                    # manual company
 
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestContactGrounding(unittest.TestCase):
+    """Audit fix: a channel must appear in a FETCHED page, not merely sit next
+    to a cited URL. DeepSeek app-tools path."""
+    from src.web_tools import SourceLog as _SL
+
+    URL = "https://conf.ru/speakers/ivanov"   # == _cand() profile_url & sources
+
+    def _log(self, text):
+        from src.web_tools import SourceLog
+        log = SourceLog()
+        log.log_fetch(self.URL, {"url": self.URL, "final_url": self.URL,
+                                 "title": "t", "text": text})
+        return log
+
+    def test_fabricated_email_stripped_even_with_real_source(self):
+        log = self._log("Иван Иванов, CIO Банк N — спикер")   # no email on page
+        doc = {"scope": "market",
+               "candidates": [_cand(contacts={"email": "ivan.fake@bank-n.ru"})]}
+        details = respondents.ground_candidates(doc, log)
+        self.assertTrue(any("ungrounded email" in d for d in details))
+        self.assertNotIn("email", doc["candidates"][0].get("contacts", {}))
+
+    def test_published_contacts_survive_grounding(self):
+        log = self._log("Иван Иванов — email ivan.real@bank-n.ru, тел +7 916 555-44-33, @ivanov_cio")
+        doc = {"scope": "market", "candidates": [_cand(contacts={
+            "email": "ivan.real@bank-n.ru", "phone": "+7 916 555-44-33",
+            "telegram": "@ivanov_cio"})]}
+        details = respondents.ground_candidates(doc, log)
+        self.assertEqual([d for d in details if "ungrounded" in d and "contact" not in d], [])
+        self.assertEqual(set(doc["candidates"][0]["contacts"]),
+                         {"email", "phone", "telegram"})
+
+    def test_repair_reaudits_changed_contact_same_profile(self):
+        prev = {"scope": "market",
+                "candidates": [_cand(contacts={"email": "real@bank-n.ru"})]}
+        new = {"scope": "market",
+               "candidates": [_cand(contacts={"email": "invented@bank-n.ru"})]}
+        # repair opened nothing; changed email must NOT be trusted
+        details = respondents.ground_candidates(new, self._log(""), prev_doc=prev)
+        self.assertTrue(any("ungrounded email" in d for d in details))
+        self.assertNotIn("email", new["candidates"][0].get("contacts", {}))
+
+    def test_repair_trusts_unchanged_contact(self):
+        prev = {"scope": "market",
+                "candidates": [_cand(contacts={"email": "real@bank-n.ru"})]}
+        new = {"scope": "market",
+               "candidates": [_cand(contacts={"email": "real@bank-n.ru"})]}
+        details = respondents.ground_candidates(new, self._log(""), prev_doc=prev)
+        self.assertEqual(new["candidates"][0]["contacts"]["email"], "real@bank-n.ru")
+        self.assertEqual([d for d in details if "email" in d], [])
+
+
+class TestGenericInbox(unittest.TestCase):
+    def test_generic_mailbox_rejected(self):
+        for addr in ("info@bank-n.ru", "pr@bank-n.ru", "sales@bank-n.ru"):
+            codes = _codes({"scope": "market",
+                            "candidates": [_cand(contacts={"email": addr})]})
+            self.assertIn(("bad-contact", "reject"), codes, addr)
+
+    def test_personal_mailbox_accepted(self):
+        codes = _codes({"scope": "market",
+                        "candidates": [_cand(contacts={"email": "i.ivanov@bank-n.ru"})]})
+        self.assertNotIn(("bad-contact", "reject"), codes)
+
+
+class TestExcelFormulaInjection(unittest.TestCase):
+    def test_leading_formula_chars_neutralized(self):
+        with tempfile.TemporaryDirectory() as td:
+            out = Path(td) / "d.xlsx"
+            xl.write_respondents_sheet(out, respondents.RESP_COLUMNS, [
+                {"name": '=HYPERLINK("http://evil")', "role": "+1", "org": "@x"}])
+            from openpyxl import load_workbook
+            ws = load_workbook(out)["Respondents"]
+            for col, txt in (("B", "=HYPER"), ("C", "+1"), ("D", "@x")):
+                cell = ws[f"{col}2"]
+                self.assertEqual(cell.data_type, "s", col)      # string, not formula
+                self.assertTrue(str(cell.value).startswith("'"), col)
