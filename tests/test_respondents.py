@@ -172,9 +172,10 @@ class TestPromptsAndGate(_QualRun):
             self.assertEqual(r["pending"], ["Directum"])
             self.assertEqual(len(r["accepted"]), 1)
 
-            # a rejected company file (guessed email)
+            # a rejected company file — empty candidates cannot be autofixed
             respondents.resp_path(self.rd, "directum").write_text(
-                json.dumps(_doc(_cand(contact_route="a@b.ru")), ensure_ascii=False),
+                json.dumps({"scope": "company", "entity": "Directum",
+                            "candidates": []}, ensure_ascii=False),
                 encoding="utf-8")
             r = respondents.gate_respondents(self.rd)
             self.assertEqual(len(r["rejected"]), 1)
@@ -182,7 +183,7 @@ class TestPromptsAndGate(_QualRun):
 
             kind, text = respondents.next_respondent_prompt(self.rd, 2)
             self.assertEqual(kind, "respondents-repair")
-            self.assertIn("private-contact", text)
+            self.assertIn("counts", text)
 
             # fixed — a DIFFERENT person than the market file (cross-file dedup)
             respondents.resp_path(self.rd, "directum").write_text(
@@ -208,7 +209,8 @@ class TestPromptsAndGate(_QualRun):
     def test_only_accepted_docs_reach_the_report(self):
         with patch.object(onepager, "gate_qual", return_value=self.q):
             respondents.resp_path(self.rd, "directum").write_text(
-                json.dumps(_doc(_cand(contact_route="a@b.ru")), ensure_ascii=False),
+                json.dumps({"scope": "company", "entity": "Directum",
+                            "candidates": []}, ensure_ascii=False),
                 encoding="utf-8")
             self.assertEqual(respondents.accepted_docs(self.rd), {})  # rejected → absent
             respondents.resp_path(self.rd, "directum").write_text(

@@ -244,3 +244,97 @@ class TestApiPendingPath(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestRepairGroundingScope(unittest.TestCase):
+    """Root-cause regression for the 2026-07-13 run: a repair pass that opens
+    almost nothing must NOT wipe URLs grounded in the original sourcing pass."""
+
+    def test_unchanged_candidates_survive_repair_grounding(self):
+        prev = {"scope": "market", "candidates": [_cand()]}
+        new = {"scope": "market", "candidates": [dict(_cand(), priority=2)]}
+        log = SourceLog()                      # repair opened NOTHING
+        details = respondents.ground_candidates(new, log, prev_doc=prev)
+        self.assertEqual(details, [])          # no stripping
+        self.assertEqual(new["candidates"][0]["profile_url"],
+                         "https://conf.ru/speakers/ivanov")
+
+    def test_new_or_changed_candidates_still_audited(self):
+        prev = {"scope": "market", "candidates": [_cand()]}
+        new = {"scope": "market", "candidates": [
+            _cand(),                                        # unchanged → skipped
+            _cand(name="Новый Человек",                     # new → audited
+                  profile_url="https://fake.ru/new")]}
+        details = respondents.ground_candidates(new, SourceLog(), prev_doc=prev)
+        self.assertEqual(len(details), 2)      # new profile blanked + source
+        self.assertEqual(new["candidates"][1]["profile_url"], "")
+        self.assertEqual(new["candidates"][0]["profile_url"],
+                         "https://conf.ru/speakers/ivanov")
+
+
+class TestAutofixDoc(unittest.TestCase):
+    def test_deterministic_healing(self):
+        doc = {"scope": "market", "candidates": [
+            _cand(priority=5, contact_route="пишите на pr@x.ru или +7 916 123-45-67"),
+            _cand(name="Стар Роль", role_current=False),
+            _cand(),                                        # dup of candidate 1
+        ], "note": "общий контакт media@t1.ru"}
+        notes = respondents.autofix_doc(doc)
+        c = doc["candidates"][0]
+        self.assertEqual(c["priority"], 3)                  # clamped
+        self.assertNotIn("pr@x.ru", json.dumps(doc, ensure_ascii=False))
+        self.assertNotIn("+7 916", json.dumps(doc, ensure_ascii=False))
+        self.assertEqual(len(doc["candidates"]), 1)         # stale + dup dropped
+        self.assertNotIn("media@t1.ru", doc["note"])
+        self.assertGreaterEqual(len(notes), 4)
+        # healed doc now passes the validator outright
+        rejects = [i for i in respondents.validate_respondents(
+            doc, {"H1"}, "market") if i["severity"] == "reject"]
+        self.assertEqual(rejects, [])
+
+
+class TestSpendBounds(unittest.TestCase):
+    def test_sourcing_never_extends_and_format_repairs_run_tiny(self):
+        with tempfile.TemporaryDirectory() as td:
+            rd = Path(td)
+            (rd / "qual").mkdir()
+            kwargs_seen = []
+
+            def collect(system, user, max_tokens=16000, on_event=None, **kw):
+                kwargs_seen.append(kw)
+                return json.dumps({"scope": "market",
+                                   "candidates": [_cand()]},
+                                  ensure_ascii=False), "eng"
+
+            q = {"accepted": [{"entity": "X", "stem": "x",
+                               "op": {"context": {"hypotheses": []},
+                                      "interview_brief": {}},
+                               "record": {}, "issues": []}],
+                 "rejected": [], "pending": [], "records_gate": {"accepted": []}}
+            # pending market sourcing
+            r1 = {"accepted": [], "rejected": [],
+                  "pending": ["Market level"], "qual": q}
+            # format-only rejected file
+            e = {"label": "Market level", "scope": "market",
+                 "stem": respondents.MARKET_STEM,
+                 "path": respondents.resp_path(rd, respondents.MARKET_STEM),
+                 "doc": {"scope": "market", "candidates": [_cand(priority=9)]},
+                 "issues": [{"field": "x.priority", "severity": "reject",
+                             "code": "bad-enum", "reason": "r"}],
+                 "verdict": "rejected"}
+            r2 = {"accepted": [], "rejected": [e], "pending": [], "qual": q}
+            for r in (r1, r2):
+                with patch.object(api_runner.runs, "_load_meta",
+                                  return_value={"market": "m", "run_id": "t",
+                                                "output_language": "Russian"}), \
+                     patch.object(respondents, "gate_respondents", return_value=r), \
+                     patch.object(respondents.onepager, "load_meta",
+                                  return_value={"research_goal": "g", "companies": {}}), \
+                     patch.object(mr, "collect", side_effect=collect), \
+                     patch.object(mr, "MODE", "gpt"):
+                    api_runner.run_respondent_step(rd, 2, log=lambda *_: None)
+            self.assertEqual(kwargs_seen[0]["allow_extend"], False)   # sourcing
+            self.assertEqual(kwargs_seen[0]["budget"],
+                             mr.stage_budget("respondents"))
+            self.assertEqual(kwargs_seen[1]["budget"], 4)             # format-only
+            self.assertEqual(kwargs_seen[1]["allow_extend"], False)

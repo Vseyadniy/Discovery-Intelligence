@@ -760,7 +760,7 @@ def run_respondent_step(run_dir: Path, batch: int = 2, provider: str | None = No
     done, failed, manual = [], [], []
 
     def _one(label, stem, prompt, extra=None, validate_after=None,
-             merge_with=None):
+             merge_with=None, prev_doc=None, budget=None):
         t0 = time.time()
         try:
             mr.reset_source_log()
@@ -769,15 +769,19 @@ def run_respondent_step(run_dir: Path, batch: int = 2, provider: str | None = No
                 "access. Return ONLY the JSON object described above — no prose, "
                 "no file operations.",
                 16000, _ev(log, f"🔎 Respondents · {label}"),
-                budget=mr.stage_budget("respondents"))
+                budget=budget or mr.stage_budget("respondents"),
+                allow_extend=False)   # sourcing never EARNS extension: fresh
+            # people-URLs always look novel, so extension = budget × spend
             doc = mr.extract_json(raw)
             # REAL grounding for respondent URLs (DeepSeek app tools): a
             # profile/source URL the pass never saw is blanked/removed, so the
-            # validator rejects the candidate → repair re-researches it
+            # validator rejects the candidate → repair re-researches it.
+            # prev_doc scopes the audit on repair passes: unchanged people
+            # keep URLs grounded when they were first sourced.
             gnotes = []
             slog = mr.get_source_log()
             if mr.MODE == "deepseek" and slog is not None:
-                gnotes = respondents.ground_candidates(doc, slog)
+                gnotes = respondents.ground_candidates(doc, slog, prev_doc=prev_doc)
                 if gnotes:
                     log(f"[grounding] Respondents · {label}: "
                         f"{len(gnotes)} URL(s) stripped/flagged")
@@ -867,9 +871,13 @@ def run_respondent_step(run_dir: Path, batch: int = 2, provider: str | None = No
                 + "\nFix ONLY the failed parts; keep every valid candidate as-is. "
                 + "Re-open sources where the role must be re-verified. "
                 + f"Prose in {meta_run['output_language']}. Return ONLY the corrected JSON.")
-            log(f"[qual-api] repair respondents {e['label']} ({len(issues)} issues)…")
+            # pure-format failures need editing, not browsing — tiny budget
+            fmt_only = {i["code"] for i in issues} <= respondents.FORMAT_CODES
+            log(f"[qual-api] repair respondents {e['label']} ({len(issues)} issues"
+                f"{', format-only' if fmt_only else ''})…")
             _one(e["label"], e["stem"], prompt,
-                 extra={"repair": 1, "sig": sig}, validate_after=_validate_after)
+                 extra={"repair": 1, "sig": sig}, validate_after=_validate_after,
+                 prev_doc=e["doc"], budget=4 if fmt_only else None)
         summary = f"repaired {len(done)}: {', '.join(done) or '—'}"
         if failed:
             summary += f" · FAILED: {'; '.join(failed)}"

@@ -461,16 +461,12 @@ class App:
             row=5, column=0, sticky="we", pady=2)
         ttk.Button(side, text="✖ Remove selected", command=self.on_qual_remove).grid(
             row=6, column=0, sticky="we", pady=2)
-        # respondent sourcing is INDEPENDENT of the one-pager track: available
-        # as soon as goal + targets exist, before (or instead of) Start
-        ttk.Button(side, text="🔎 Find respondents", command=self.on_qual_respondents).grid(
-            row=7, column=0, sticky="we", pady=(8, 2))
         ttk.Button(side, text="Start / update qual track", command=self.on_qual_start).grid(
-            row=8, column=0, sticky="we", pady=2)
-        ttk.Label(side, text="One-pagers / step:").grid(row=9, column=0, sticky="w", pady=(6, 0))
+            row=7, column=0, sticky="we", pady=(8, 2))
+        ttk.Label(side, text="One-pagers / step:").grid(row=8, column=0, sticky="w", pady=(6, 0))
         self.qual_batch = tk.IntVar(value=2)
         ttk.Spinbox(side, from_=1, to=4, textvariable=self.qual_batch, width=3).grid(
-            row=10, column=0, sticky="w")
+            row=9, column=0, sticky="w")
 
         # mode row — same pattern as tab 1
         ttk.Label(frm, text="Mode").grid(row=4, column=0, sticky="w", **pad)
@@ -519,17 +515,31 @@ class App:
         self.qual_eta_lbl.grid(row=0, column=1, sticky="w", padx=10)
         self.qual_lbl = ttk.Label(frm, text="—")
         self.qual_lbl.grid(row=8, column=0, columnspan=4, sticky="w", **pad)
-        # independent status of the optional respondent-sourcing stage
-        self.resp_lbl = ttk.Label(
-            frm, foreground="#666",
-            text="🔎 Respondents (optional, independent of one-pagers): —")
-        self.resp_lbl.grid(row=9, column=0, columnspan=4, sticky="w", **pad)
+        # ── Respondent sourcing — its own stage, own buttons, own status ──
+        rs = ttk.Frame(frm)
+        rs.grid(row=9, column=0, columnspan=4, sticky="we", **pad)
+        ttk.Label(rs, text="🔎 Respondent sourcing (optional · independent of one-pagers)",
+                  font=("", 12, "bold")).grid(row=0, column=0, columnspan=4, sticky="w")
+        ttk.Button(rs, text="Next respondent prompt ▶",
+                   command=self.on_resp_next_prompt).grid(row=1, column=0, padx=(0, 4), pady=2)
+        ttk.Button(rs, text="Find respondents  ⚡",
+                   command=self.on_qual_respondents).grid(row=1, column=1, padx=4, pady=2)
+        ttk.Button(rs, text="Open shortlist",
+                   command=self.on_resp_shortlist).grid(row=1, column=2, padx=4, pady=2)
+        self.resp_lbl = ttk.Label(rs, foreground="#666", wraplength=820,
+                                  justify="left", text="status: —")
+        self.resp_lbl.grid(row=2, column=0, columnspan=4, sticky="w")
 
-        self.qual_txt = tk.Text(frm, height=12, width=96, wrap="word")
-        self.qual_txt.grid(row=10, column=0, columnspan=4, sticky="nsew", **pad)
+        # stage banner: which stage & prompt the big text area currently shows
+        self.qual_stage_lbl = ttk.Label(frm, text="📋 Nothing shown yet — press a "
+                                        "«Next … prompt ▶» button.",
+                                        font=("", 12, "bold"), foreground="#046")
+        self.qual_stage_lbl.grid(row=10, column=0, columnspan=4, sticky="w", **pad)
+        self.qual_txt = tk.Text(frm, height=18, width=96, wrap="word")
+        self.qual_txt.grid(row=11, column=0, columnspan=4, sticky="nsew", **pad)
         self.qual_txt.configure(state="disabled")
         frm.columnconfigure(0, weight=1)
-        frm.rowconfigure(10, weight=1)
+        frm.rowconfigure(11, weight=1)
         self.qual_rows: list[dict] = []
         self._refresh_provider_labels()   # fill the picker created above
         self._apply_qual_mode()
@@ -560,10 +570,49 @@ class App:
             messagebox.showwarning("Cannot start", str(e))
             return False
 
+    def _set_stage(self, text: str):
+        """Banner above the prompt area: which stage & prompt is shown."""
+        self.qual_stage_lbl.configure(text=f"📋 {text}")
+
+    def on_resp_next_prompt(self):
+        """Explicit PROMPT flow for respondent sourcing — always shows and
+        copies the next respondent prompt, independent of the mode toggle."""
+        if not self.run_dir:
+            messagebox.showinfo("No targets", "Load a past run or add companies "
+                                              "first — one-pagers are not required.")
+            return
+        if self.qual_rows and not self._qual_persist(require_goal=False):
+            return
+        from src import respondents
+        try:
+            kind, text = respondents.next_respondent_prompt(
+                self.run_dir, self.qual_batch.get())
+        except SystemExit as e:
+            messagebox.showinfo("Not ready", str(e))
+            return
+        self._show_qual(text)
+        self._set_stage(f"Respondent sourcing — {kind} prompt (copied)")
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        self.status.set(f"🔎 Respondent prompt ({kind}) copied — paste it into "
+                        f"ChatGPT with browsing, save the JSON, then press again.")
+        self._qual_refresh()
+
+    def on_resp_shortlist(self):
+        from src import respondents
+        if not self.run_dir:
+            return
+        p = respondents.shortlist_path(self.run_dir)
+        if p.exists():
+            open_path(p)
+        else:
+            messagebox.showinfo("No shortlist yet",
+                                "No respondent files validated yet — run "
+                                "«Find respondents» or the prompt flow first.")
+
     def on_qual_respondents(self):
-        """Optional sourcing stage — INDEPENDENT of the one-pager track: needs
-        goal + targets (run-backed or manual), NOT one-pagers. Prompt mode
-        shows the paste-prompt, API mode runs it."""
+        """Respondent sourcing via API ⚡ — one step per press (source → repair
+        → done). INDEPENDENT of the one-pager track: needs targets only."""
         if not self.run_dir:
             messagebox.showinfo("No targets", "Load a past run or add companies "
                                               "first — one-pagers are not required.")
@@ -571,20 +620,6 @@ class App:
         # persist targets (goal optional here) so sourcing works before
         # «Start qual track» — the goal is only required for one-pagers
         if self.qual_rows and not self._qual_persist(require_goal=False):
-            return
-        from src import respondents
-        if self.qual_mode.get() == "prompt":
-            try:
-                kind, text = respondents.next_respondent_prompt(
-                    self.run_dir, self.qual_batch.get())
-            except SystemExit as e:
-                messagebox.showinfo("Not ready", str(e))
-                return
-            self._show_qual(text)
-            self.root.clipboard_clear()
-            self.root.clipboard_append(text)
-            self.status.set(f"🔎 Respondent prompt ({kind}) copied — paste it into "
-                            f"ChatGPT with browsing, save the JSON, then press again.")
             return
         provider = self.provider.get()
         self.qual_agent_lbl.configure(text=f"🔎 sourcing respondents ({provider})…")
@@ -601,6 +636,8 @@ class App:
 
                 def done():
                     self.qual_agent_lbl.configure(text=f"✔ {summary}")
+                    self._set_stage("Respondent sourcing — last ⚡ step result "
+                                    "(see status below)")
                     self.status.set(f"Respondents: {summary}")
                     self._qual_refresh()
                 self.root.after(0, done)
@@ -631,6 +668,7 @@ class App:
 
                 def done():
                     self._show_qual(text)
+                    self._set_stage(f"Qualitative one-pagers — {kind} (after ⚡ step)")
                     self.qual_agent_lbl.configure(text=f"✔ {summary}")
                     self.status.set(f"Qual API step done · next: {kind}")
                     self.qual_api_start_btn.configure(state="normal")
@@ -821,6 +859,7 @@ class App:
             try:
                 kind, text = onepager.next_qual_prompt(self.run_dir, self.qual_batch.get())
                 self.root.after(0, lambda: (self._show_qual(text),
+                                            self._set_stage(f"Qualitative one-pagers — {kind} prompt"),
                                             self.status.set(f"Qual step: {kind} — prompt ready"),
                                             self._qual_refresh()))
             except SystemExit as e:

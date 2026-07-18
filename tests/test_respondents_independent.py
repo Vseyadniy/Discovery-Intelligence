@@ -311,8 +311,17 @@ class TestGoalOptional(unittest.TestCase):
                    {"scope": "market",
                     "candidates": [_cand(contact_route="ivanov@bank.ru")]})
         r = respondents.gate_respondents(self.rd)
-        codes = {i["code"] for e in r["rejected"] for i in e["issues"]}
-        self.assertIn("private-contact", codes)   # privacy net still applies
+        # the gate now HEALS private contacts deterministically (autofix):
+        # the email is stripped from the saved file, the file is accepted
+        self.assertEqual(len(r["accepted"]), 1)
+        saved = json.loads(respondents.resp_path(
+            self.rd, respondents.MARKET_STEM).read_text(encoding="utf-8"))
+        self.assertNotIn("ivanov@bank.ru", json.dumps(saved))
+        # the validator net itself is unchanged for anything not autofixed
+        raw = {"scope": "market", "candidates": [_cand(contact_route="x@y.ru")]}
+        codes = {i["code"] for i in respondents.validate_respondents(
+            raw, set(), "market") if i["severity"] == "reject"}
+        self.assertIn("private-contact", codes)
 
 
 # ── API mode is equally independent of one-pagers ────────────────────────────

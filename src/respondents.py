@@ -85,20 +85,35 @@ def _norm_person(c: dict) -> str:
     return runs._norm(f"{c.get('name', '')}|{c.get('org', '')}")
 
 
-def ground_candidates(doc: dict, slog) -> list[str]:
+def ground_candidates(doc: dict, slog, prev_doc: dict | None = None) -> list[str]:
     """DeepSeek app-tools only: a candidate's profile_url and sources must be
     URLs the pass actually saw (searched/fetched). Same philosophy as record
     grounding: an ungrounded profile_url is BLANKED and ungrounded sources are
     removed, so validate_respondents rejects the candidate as required-empty
     and routes it into the repair loop; a domain-only match keeps the URL but
     downgrades confidence. Returns detail strings (full URLs — event/debug
-    logs only, never persisted in the file)."""
+    logs only, never persisted in the file).
+
+    `prev_doc` MUST be passed on repair/refine passes: a candidate already
+    present in the previous file with the SAME profile_url was grounded when
+    first sourced — a repair that fixes an enum re-opens nothing, and without
+    this scope the audit would wipe legitimately grounded URLs (the exact
+    over-stripping livelock the quant track fixed with only_fields)."""
     from .web_tools import _norm
     with slog._lock:
         seen = set(slog.seen)
     domains = {n.split("/", 1)[0] for n in seen}
+    prev_urls = {}
+    if isinstance(prev_doc, dict):
+        prev_urls = {_norm_person(c): str(c.get("profile_url") or "")
+                     for c in prev_doc.get("candidates") or []
+                     if isinstance(c, dict)}
     details: list[str] = []
     for c in doc.get("candidates") or []:
+        if (isinstance(c, dict)
+                and prev_urls.get(_norm_person(c)) == str(c.get("profile_url") or "")
+                and _norm_person(c) in prev_urls):
+            continue   # unchanged person — grounded in their original pass
         if not isinstance(c, dict):
             continue
         who = str(c.get("name") or "?")
@@ -126,6 +141,69 @@ def ground_candidates(doc: dict, slog) -> list[str]:
             if len(kept) != len(srcs):
                 c["sources"] = kept
     return details
+
+
+# Codes a repair can fix WITHOUT any web research (pure format edits) — such
+# repairs run on a tiny tool budget instead of a full browsing pass.
+FORMAT_CODES = frozenset({"bad-enum", "private-contact", "duplicate",
+                          "bad-date", "stale-role"})
+
+
+def autofix_doc(doc: dict) -> list[str]:
+    """Deterministic, zero-API repair of mechanical failures — the respondent
+    counterpart of runs.autofix_records. Clamps priorities into 1–3, strips
+    email/phone/obfuscated contact strings out of text fields (URLs excluded),
+    drops keys that may carry private data, drops candidates whose role is
+    explicitly not current, and drops in-file person duplicates. Returns fix
+    notes; mutates `doc` in place."""
+    notes: list[str] = []
+    cands = doc.get("candidates")
+    if not isinstance(cands, list):
+        return notes
+    kept, seen = [], set()
+    for c in cands:
+        if not isinstance(c, dict):
+            kept.append(c)
+            continue
+        who = str(c.get("name") or "?")
+        if str(c.get("role_current", "")).lower() in ("false", "no"):
+            notes.append(f"{who}: dropped — role not current")
+            continue
+        key = _norm_person(c)
+        if key.strip("|") and key in seen:
+            notes.append(f"{who}: dropped in-file duplicate")
+            continue
+        seen.add(key)
+        pr = c.get("priority")
+        if isinstance(pr, (int, float)) and pr not in PRIORITIES:
+            c["priority"] = min(max(int(pr), 1), 3)
+            notes.append(f"{who}: priority {pr} → {c['priority']}")
+        for k in [k for k in c
+                  if set(re.split(r"[^a-zа-яё]+", str(k).lower())) - {""}
+                  & _BANNED_KEY_TOKENS]:
+            c.pop(k, None)
+            notes.append(f"{who}: removed private-data key «{k}»")
+        for k, v in list(c.items()):
+            if not isinstance(v, str) or v.startswith(("http://", "https://")):
+                continue
+            cleaned = _EMAIL_RE.sub("", v)
+            cleaned = _PHONE_RE.sub("", cleaned)
+            cleaned = _EMAIL_OBFUSCATED_RE.sub("", cleaned)
+            if cleaned != v:
+                cleaned = re.sub(r"\s{2,}", " ", cleaned).strip(" ,;:—-·")
+                if k == "contact_route" and not cleaned:
+                    cleaned = "через публичный профиль"
+                c[k] = cleaned
+                notes.append(f"{who}: private contact string removed from «{k}»")
+        kept.append(c)
+    doc["candidates"] = kept
+    note = doc.get("note")
+    if isinstance(note, str):
+        cleaned = _EMAIL_OBFUSCATED_RE.sub("", _PHONE_RE.sub("", _EMAIL_RE.sub("", note)))
+        if cleaned != note:
+            doc["note"] = cleaned.strip()
+            notes.append("note: private contact string removed")
+    return notes
 
 
 # ── validation (own rules — the one-pager gate is untouched) ──────────────────
@@ -540,6 +618,12 @@ def gate_respondents(run_dir: Path) -> dict:
         if doc is None:
             out["pending"].append(label)
             continue
+        fixes = autofix_doc(doc)          # deterministic, zero-API healing
+        if fixes:
+            p.write_text(json.dumps(doc, ensure_ascii=False, indent=2),
+                         encoding="utf-8")
+            runs._event(run_dir, "respondents_autofixed", scope=label,
+                        fixes=len(fixes))
         issues = validate_respondents(doc, hyp_ids, scope,
                                       entity="" if scope == "market" else label)
         entries.append({"label": label, "scope": scope, "stem": stem,
@@ -580,8 +664,8 @@ def gate_respondents(run_dir: Path) -> dict:
         if ref > _mtime(e["path"]):
             out["refine"].append(e)
 
-    if out["accepted"]:
-        _write_shortlist(run_dir, out)
+    if out["accepted"] or out["rejected"]:
+        _write_shortlist(run_dir, out)    # every target's state stays visible
     return out
 
 
@@ -597,6 +681,16 @@ def _write_shortlist(run_dir: Path, r: dict) -> None:
     lines = ["# Respondent shortlist", ""]
     if goal:
         lines += [f"**Research goal:** {goal}", ""]
+    # every target reaches a visible state — the shortlist never leaves the
+    # reader guessing which files made it in and which are still failing
+    states = ([f"- ✓ {e['label']} — accepted "
+               f"({len(e['doc'].get('candidates') or [])} candidates)"
+               for e in r["accepted"]]
+              + [f"- ✗ {e['label']} — rejected "
+                 f"({len([i for i in e['issues'] if i['severity'] == 'reject'])} "
+                 f"issue(s), see repair)" for e in r["rejected"]]
+              + [f"- ⏳ {b} — not sourced yet" for b in r["pending"]])
+    lines += ["## Target states", *states, ""]
     lines += ["Публичные профессиональные данные; контакт — только через "
               "публичный профиль. Порядок: приоритет 1 → 3.", ""]
     for e in sorted(r["accepted"], key=lambda e: (e["scope"] != "market", e["label"])):
