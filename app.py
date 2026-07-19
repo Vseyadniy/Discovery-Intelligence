@@ -529,6 +529,8 @@ class App:
                    command=self.on_qual_respondents).grid(row=1, column=1, padx=4)
         ttk.Button(rs, text="▶ Prompt (manual)",
                    command=self.on_resp_next_prompt).grid(row=1, column=2, padx=4)
+        ttk.Button(rs, text="🔄 Run again", command=self.on_resp_rerun).grid(
+            row=1, column=3, padx=4)
         ttk.Label(rs, text="Step 2 — get the list:").grid(
             row=2, column=0, sticky="w", pady=2)
         ttk.Button(rs, text="📇 Open Excel", command=self.on_resp_excel).grid(
@@ -618,6 +620,26 @@ class App:
             messagebox.showinfo("No shortlist yet",
                                 "No respondent files validated yet — run "
                                 "«Find respondents» or the prompt flow first.")
+
+    def on_resp_rerun(self):
+        """Arm a NEW respondent pass over the current targets (even at «done»),
+        then run it in the active mode. Previous accepted results are preserved
+        and merged only after the new pass succeeds."""
+        from src import respondents
+        if not self.run_dir:
+            messagebox.showinfo("No targets", "Source respondents first.")
+            return
+        mode = "api" if self.qual_mode.get() == "api" else "prompt"
+        try:
+            info = respondents.request_rerun(self.run_dir, mode)
+        except SystemExit as e:
+            messagebox.showinfo("Cannot rerun", str(e))
+            return
+        self.status.set(f"🔄 New respondent pass #{info['attempt']} armed over "
+                        f"{info['targets']} target(s) — running in {mode} mode…")
+        self._qual_refresh()
+        # hand off to the normal step: prompt mode shows the new prompt, API runs it
+        (self.on_resp_next_prompt if mode == "prompt" else self.on_qual_respondents)()
 
     def on_resp_excel(self):
         """Build/refresh the outreach «Respondents» sheet and open the workbook."""

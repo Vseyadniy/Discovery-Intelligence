@@ -891,12 +891,26 @@ def run_respondent_step(run_dir: Path, batch: int = 2, provider: str | None = No
                 f"newly accepted one-pager(s)…")
             _one(e["label"], e["stem"],
                  respondents._render_refine(run_dir, meta_run, [e], targets),
-                 extra={"refine": 1}, merge_with=e["doc"])
+                 extra={"refine": 1}, merge_with=e["doc"], prev_doc=e["doc"])
         summary = f"refined {len(done)}: {', '.join(done) or '—'}"
         if failed:
             summary += f" · FAILED: {'; '.join(failed)} (press again to retry)"
         return summary + " — press again to re-check"
 
+    if r.get("rerun"):
+        attempt = (qmeta.get("respondents_rerun") or {}).get("attempt", "?")
+        for e in r["rerun"][:max(1, int(batch))]:
+            log(f"[qual-api] rerun #{attempt}: new respondent pass for "
+                f"{e['label']} (merging into the existing shortlist)…")
+            _one(e["label"], e["stem"],
+                 respondents._render_refine(run_dir, meta_run, [e], targets, rerun=True),
+                 extra={"rerun": attempt}, merge_with=e["doc"], prev_doc=e["doc"])
+        summary = f"rerun #{attempt} — updated {len(done)}: {', '.join(done) or '—'}"
+        if failed:
+            summary += f" · FAILED: {'; '.join(failed)} (press again to retry)"
+        return summary + " — press again to continue the new pass"
+
+    respondents._clear_rerun_if_done(run_dir, r)   # rerun finished → back to done
     if q["accepted"] and onepager.report_is_stale(run_dir):
         onepager.build_report(run_dir)
     n = sum(len(e["doc"].get("candidates") or []) for e in r["accepted"])

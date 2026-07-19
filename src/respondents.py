@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from datetime import date
 from pathlib import Path
 
@@ -706,6 +707,14 @@ def merge_candidates(old_doc, new_doc: dict) -> dict:
             merged[k] = c
     out = dict(new_doc)
     out["candidates"] = [merged[k] for k in order]
+    # a file's identity is fixed — never let a rerun/refine pass flip the
+    # scope or entity of the file it is merging into
+    if old_doc.get("scope"):
+        out["scope"] = old_doc["scope"]
+    if "entity" in old_doc:
+        out["entity"] = old_doc["entity"]
+    elif old_doc.get("scope") == "market":
+        out.pop("entity", None)
     return out
 
 
@@ -717,7 +726,7 @@ def gate_respondents(run_dir: Path) -> dict:
     hypotheses/archetypes (update + merge, never discard)."""
     targets, q = sourcing_targets(run_dir)
     out = {"accepted": [], "rejected": [], "pending": [], "refine": [],
-           "qual": q, "targets": targets}
+           "rerun": [], "qual": q, "targets": targets}
     if not targets:
         return out
 
@@ -780,9 +789,54 @@ def gate_respondents(run_dir: Path) -> dict:
         if ref > _mtime(e["path"]):
             out["refine"].append(e)
 
+    # user-requested rerun: accepted files NOT yet re-sourced since the request
+    # (mtime ≤ request time) get a fresh merging pass, even at «done». The
+    # request auto-expires once every accepted file is newer than it.
+    rr = (onepager.load_meta(run_dir).get("respondents_rerun") or {})
+    at = rr.get("at")
+    if at:
+        out["rerun"] = [e for e in out["accepted"] if _mtime(e["path"]) <= at]
+
     if out["accepted"] or out["rejected"]:
         _write_shortlist(run_dir, out)    # every target's state stays visible
     return out
+
+
+def request_rerun(run_dir: Path, mode: str) -> dict:
+    """Arm a new respondent pass over the CURRENTLY-accepted targets, even when
+    the track is «done». Non-destructive: the new pass merges into the existing
+    files (previous accepted candidates are preserved), and the Excel/report
+    are only rebuilt once the rerun completes. Records the attempt + mode."""
+    r = gate_respondents(run_dir)
+    if not r["accepted"]:
+        raise SystemExit("Nothing to rerun yet — source respondents first.")
+    if r["pending"] or r["rejected"]:
+        raise SystemExit("Finish the current respondent pass (pending/rejected "
+                         "targets remain) before starting a new one.")
+    meta = onepager.load_meta(run_dir)
+    # the attempt counter persists across completed reruns (the active flag is
+    # cleared on completion, so it can't hold the count)
+    attempt = int(meta.get("respondents_rerun_total", 0)) + 1
+    meta["respondents_rerun_total"] = attempt
+    meta["respondents_rerun"] = {"at": time.time(), "attempt": attempt, "mode": mode}
+    onepager.save_meta(run_dir, meta)
+    runs._event(run_dir, "respondents_rerun_requested", attempt=attempt,
+                mode=mode, targets=len(r["accepted"]))
+    return {"attempt": attempt, "targets": len(r["accepted"])}
+
+
+def _clear_rerun_if_done(run_dir: Path, r: dict) -> bool:
+    """Clear the rerun flag once no accepted file is still stale against it.
+    Returns True if a rerun was active and is now complete."""
+    meta = onepager.load_meta(run_dir)
+    rr = meta.get("respondents_rerun")
+    if rr and not r.get("rerun"):
+        meta.pop("respondents_rerun", None)
+        onepager.save_meta(run_dir, meta)
+        runs._event(run_dir, "respondents_rerun_complete",
+                    attempt=rr.get("attempt"), mode=rr.get("mode"))
+        return True
+    return False
 
 
 def shortlist_path(run_dir: Path) -> Path:
@@ -822,10 +876,10 @@ def _write_shortlist(run_dir: Path, r: dict) -> None:
 
 
 def _render_refine(run_dir: Path, meta_run: dict, entries: list[dict],
-                   targets: dict) -> str:
-    """Refinement prompt: one-pagers were accepted AFTER these files were
-    sourced — update each shortlist against the new hypotheses/archetypes,
-    merging (never restarting from scratch)."""
+                   targets: dict, rerun: bool = False) -> str:
+    """Refinement/rerun prompt: update each shortlist against the current
+    hypotheses/archetypes, MERGING (never restarting from scratch). `rerun`
+    frames it as a user-requested fresh pass rather than a one-pager catch-up."""
     save = f"logs/{meta_run['run_id']}/qual"
     blocks = []
     for e in entries:
@@ -850,13 +904,16 @@ Archetypes to cover:
 ```json
 {json.dumps(arch, ensure_ascii=False)}
 ```""")
-    return f"""# Respondent refinement pass — {meta_run['market']}
+    intro = ("This is a NEW respondent pass you requested. Find ADDITIONAL "
+             "named people and fresh published contacts to broaden the existing "
+             "shortlist below." if rerun else
+             "One-pagers were accepted AFTER the respondent files below were "
+             "sourced. UPDATE each file against the new hypotheses/archetypes.")
+    return f"""# Respondent {'rerun' if rerun else 'refinement'} pass — {meta_run['market']}
 
-One-pagers were accepted AFTER the respondent files below were sourced. UPDATE
-each file against the new hypotheses/archetypes: re-check that every existing
-candidate is still relevant and current, point their `addresses` at the H* ids
-they can actually speak to, add candidates for uncovered archetypes, and remove
-only people who no longer fit. MERGE — do not discard the existing shortlist.
+{intro} Re-check that every existing candidate is still relevant and current,
+add candidates for uncovered archetypes/hypotheses, and remove only people who
+no longer fit. MERGE — the existing accepted candidates are KEPT.
 {_RULES}
 
 {chr(10).join(blocks)}
@@ -896,7 +953,12 @@ def next_respondent_prompt(run_dir: Path, batch: int = 2) -> tuple[str, str]:
         kind = "respondents-refine"
         text = _render_refine(run_dir, meta_run,
                               r["refine"][:max(1, int(batch))], targets)
+    elif r["rerun"]:
+        kind = "respondents-rerun"
+        text = _render_refine(run_dir, meta_run,
+                              r["rerun"][:max(1, int(batch))], targets, rerun=True)
     else:
+        _clear_rerun_if_done(run_dir, r)
         kind = "done"
         n = sum(len(e["doc"].get("candidates") or []) for e in r["accepted"])
         where = (("Also embedded in the qual report («Open report»): market "
@@ -923,11 +985,13 @@ def progress(run_dir: Path) -> dict:
              "(one-pagers NOT required)" if not r["targets"] else
              f"sourcing ({p} to go)" if p else
              f"repair — {rej} rejected" if rej else
+             f"new pass in progress ({len(r['rerun'])} to go)" if r["rerun"] else
              f"refine available — {n} candidates, new one-pagers to target"
              if r["refine"] else
              f"done — {n} candidates")
     return {"accepted": a, "rejected": rej, "pending": p, "candidates": n,
-            "contacts": contacts, "refine": len(r["refine"]), "phase": phase}
+            "contacts": contacts, "refine": len(r["refine"]),
+            "rerun": len(r["rerun"]), "phase": phase}
 
 
 # ── report helpers (consumed by onepager.build_report) ───────────────────────
