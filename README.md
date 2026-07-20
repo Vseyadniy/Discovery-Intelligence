@@ -1,192 +1,230 @@
-# Discovery Intelligence Data Layer — MVP v0.1
+# Discovery Intelligence Layer
 
-An internal accelerator for B2B market-intelligence delivery. Takes a list of
-companies, runs **2 parallel collector agents** (official/registry vs
-news/third-party), a **verifier** that merges them and flags conflicts, shows you
-a **review card**, and writes the claims you approve into a **SQLite knowledge
-base** with full provenance.
+A desktop app (Python + Tkinter) for **B2B market & competitive intelligence**.
+You give it a market; it produces three deliverables:
 
-Not a SaaS. No web app, no dashboards, no monitoring. You operate it; it speeds up
-paid delivery.
+1. **Quantitative research** — a validated Excel table of companies (legal
+   entity, ИНН, revenue history, headcount, products, positioning, significant
+   news, …), built by multiple research agents behind a strict anti-fabrication
+   gate.
+2. **Qualitative research** — a per-company "one-pager" (context, hypotheses,
+   interview brief, survey, interview guide, priorities) and a merged `.docx`
+   report, with every claim marked as fact / inference / hypothesis.
+3. **Respondent sourcing** — an outreach-ready contact list: named real people
+   (market experts + company-specific candidates) with **published** Telegram /
+   phone / email / LinkedIn, written into a **Respondents** sheet in the Excel
+   workbook.
 
-## Roles (fixed)
-- **GPT-5.5 — researcher.** Runs the collectors: live web research on official,
-  registry, financial, news and market sources. This is the engine that produces
-  claims.
-- **Claude — architect & administrator.** Designs and maintains the schema,
-  prompts, source registry and pipeline; adjudicates the verifier's escalations
-  (entity ambiguity, A/B conflicts, strategy calls); scores each run against the
-  blinded gold set; and imports approved claims into the KB. Claude does not stand
-  in for the researcher on routine collection.
+Every stage works in two modes: **Prompt** (copy a prompt, paste into a
+ChatGPT/Claude web chat, paste the JSON back — no API key) or **API** (the app
+calls the model itself — automatic ⚡). All three workflows are independent: you
+can run any subset.
 
-## Folder structure
-```
-discovery-intelligence-layer/
-├── README.md
-├── requirements.txt
-├── app.py                    # desktop launcher (Tkinter): pick model/market/depth → prompt → Excel
-├── build_macos_app.py        # build a real double-clickable "Discovery Research.app"
-├── launch_app.command        # dev fallback: run the app from Terminal
-├── .env.example              # copy to .env, add local API keys if running the parser
-├── config/
-│   ├── schema.yaml           # the data schema each entity is filled against (+ output_language)
-│   ├── depth_levels.yaml     # superficial / medium / detailed market-depth criteria
-│   ├── source_registry.yaml  # geo × group × industry → sources (with tiers)
-│   └── corrections.json      # your standing correction rules
-├── logs/                     # one folder per research run (the record the architect analyzes)
-├── inputs/
-│   └── input_entities.csv    # the company list to process
-├── db/
-│   ├── schema.sql            # entities / claims / sources / corrections (+ view)
-│   └── kb.sqlite             # created on first run
-├── prompts/
-│   ├── collector_a.md        # official / registry / financial
-│   ├── collector_b.md        # news / market / third-party
-│   └── verifier.md           # merge + conflict + confidence
-├── templates/
-│   └── review_card.md        # the human-review card
-├── src/
-│   ├── model_router.py       # GPT-5.5 research by default, escalate-to-Claude-on-a-flag
-│   ├── db.py                 # SQLite helpers
-│   ├── render_prompts.py     # print the real filled A/B/verifier prompts (emulated runs)
-│   ├── runs.py               # run-log manager: create run + prompt, progress, build Excel, analyze
-│   ├── export_excel.py       # verifier records / KB → .xlsx (Excel / Airtable-ready)
-│   └── orchestrator.py       # the pipeline
-├── outputs/
-│   ├── review_cards/         # one .md card per entity
-│   ├── agent_runs/           # emulated run: per-company A/B/verifier prompts + JSON
-│   └── gpu_iaas_ru.csv       # the GPU research table (feeds the .xlsx; Airtable-ready)
-└── docs/
-    ├── test_run_plan.md            # Stage-1 plan (GPU / IaaS Russia, worked example)
-    ├── researcher_codex_manual.md  # market-agnostic operating manual for GPT-5.5 in Codex
-    └── test_gpu/
-        └── GPU_IaaS_RU.xlsx        # client-facing deliverable (one row per company)
-```
+> Not a SaaS. A single-operator desktop tool. Your API keys live only in a local
+> `.env` and never leave your machine.
 
-## Data model (claim-level provenance)
-- **entities** — the disambiguated subject (brand/legal_entity/product/group), with
-  `brand_name`, `legal_entity_name`, `inn`, `website`, `entity_type`,
-  `confidence_entity_match`.
-- **claims** — one field, one value, one source, with `confidence`, `snippet`,
-  `year`, `assumptions`. Losing claims are kept as the evidence base.
-- **sources** — every URL with a trust `tier` (1 official → 3 blog).
-- **corrections** — your edits become rules, injected into later prompts.
-- **consolidated_record** (view) — best approved claim per (entity, field),
-  ranked by confidence → source tier → recency.
+---
 
-## Two modes
-Pick per run with `--mode` (or `AGENT_MODE` in `.env`):
+## Install & launch
 
-| Mode | Collectors | Verification | Needs |
-|---|---|---|---|
-| `gpt` | **GPT-5.5** (researcher) **with web search** | GPT-5.5; **escalates to Claude** on a flag | an OpenAI key |
-| `claude` | Claude (Opus by default) **with web search** | Claude | nothing extra — runs here |
+Requires **Python 3.11+**.
 
-- **`gpt`** is the production division of labour: **GPT-5.5 researches** (OpenAI Responses API + `web_search` tool, real live sources) and default verification runs on GPT-5.5, escalating to `ESCALATION_MODEL` (Claude Opus) only on a flag — entity ambiguity, an unresolved A/B conflict, or a strategic call (`src/model_router.py`, `needs_escalation()`). Set `CHEAP_MODEL=gpt-5.5` and paste `CHEAP_API_KEY`. `CHEAP_BASE_URL` can point at any OpenAI-compatible endpoint; leave blank for OpenAI. (`cheap` is accepted as a back-compat alias for `gpt`.)
-- **`claude`** runs fully on Claude and works out of the box (`ant auth login` or `ANTHROPIC_API_KEY`). Collectors use the server-side web-search tool so they research rather than answer from memory. Set `CLAUDE_MODEL` to `claude-opus-4-8` (default), `claude-sonnet-5`, or `claude-haiku-4-5`. Use this as the in-house quality baseline for the gold set.
-
-Subscription-assisted research done directly in ChatGPT (GPT-5.5) can be saved under
-`docs/`, but it is not a local parser run and will not write SQLite claims unless
-the generated records are imported separately.
-
-Escalation flag and mode routing live in `src/model_router.py` (`collect()`, `verify()`).
-
-## Run
 ```bash
-pip install -r requirements.txt
-cp .env.example .env                          # claude mode works with just ANTHROPIC creds
-python -m src.orchestrator --mode claude --limit 20                 # fully-Claude baseline (runs here)
-python -m src.orchestrator --mode gpt    --limit 20                 # GPT-5.5 research + Claude escalation
-python -m src.orchestrator --mode gpt --subsector IaaS/GPU          # scope a run to one subsector
+pip install -r requirements.txt      # anthropic, openai, pyyaml, openpyxl,
+                                     # python-docx, requests, beautifulsoup4
+python app.py                        # opens the 3-tab desktop app
 ```
-Each entity produces a review card in `outputs/review_cards/`. In interactive mode
-you approve/edit/reject in the terminal:
-```
-edit revenue = 1.2 млрд ₽ (2024, bo.nalog.ru) | list-org is stale, prefer the filing
-reject headcount
-approve all
-```
-Edits with a `| why` are stored as correction rules. Flagged (low-confidence /
-conflicting) fields are **not** written unless you `approve all` or edit them.
 
-Smoke-test without prompts: `python -m src.orchestrator --limit 2 --auto`.
-Stage-1 run (GPU / IaaS Russia): `python -m src.orchestrator --mode gpt --subsector IaaS/GPU`.
+For sharing, `python make_installer.py` builds a zip with double-click
+installers for macOS (`install.command`) and Windows (`install.bat`); recipients
+enter their own keys. The app runs without any key in **Prompt** mode.
 
-## Desktop app — one button, no re-typing the prompt
-`app.py` is a small Tkinter launcher so you don't log in and paste the manual every
-time. It's the **prep + ingest** flow (no API key, uses your ChatGPT/Claude
-subscription).
+The app has three tabs: **1 · Quantitative research**, **2 · Qualitative
+research** (which also hosts respondent sourcing), and **Settings** (API keys,
+Excel/report layout editors).
 
-**Make it a real macOS app** (double-click from Launchpad/Dock, no Terminal):
+---
+
+## Providers & modes
+
+**Prompt mode** needs no keys: press *Next prompt ▶*, paste the prompt into any
+capable web chat with browsing, save the returned JSON where the prompt says,
+press again. **API mode** (⚡) drives the same state machine automatically.
+
+Four API providers (set keys in Settings → saved to `.env`):
+
+| Provider | Model (default) | Web research |
+|---|---|---|
+| ChatGPT | `gpt-5.5` (OpenAI Responses API) | server-side `web_search` |
+| Claude | `claude-opus-4-8` | server-side `web_search` |
+| Grok | `grok-4.20-0309-reasoning` (xAI) | server-side (Agent Tools API) |
+| DeepSeek | `deepseek-chat` | **app-side** tools (needs a Search API key) |
+
+DeepSeek has no server-side browsing, so the app gives it its own
+`web_search` + `fetch_url` tools (client-side function calling). That requires a
+**Brave Search API key** (`SEARCH_API_KEY`; free tier at
+api-dashboard.search.brave.com). One medium-depth run can exhaust the Brave free
+monthly quota — the app degrades gracefully (see Limitations).
+
+---
+
+## Workflow 1 — Quantitative research (tab 1)
+
+1. **Configure**: enter the market, pick depth (superficial / medium /
+   detailed), pick mode, set companies-per-step, press **Generate run ▶** (or
+   **Load past run…**). A run folder is created under
+   `logs/<date>_<market>_<depth>/`.
+2. **Discovery**: the model returns the company cohort + a short **segment
+   taxonomy** (`companies.json`).
+3. **Per-company research**: for each company, **Collector A** (official /
+   registry / financial sources) and **Collector B** (news / market / analyst)
+   research independently, then a **Verifier** merges them into one record.
+4. **Ingest gate**: every record is machine-validated (see below). Rejected
+   records go to a bounded **repair loop**; mechanical problems are auto-fixed
+   with no model call.
+5. **Build Excel**: gate-accepted records → `<date>_<market>_research.xlsx`
+   (+ `.csv`). Financial columns have a two-level drill-down; low-confidence
+   cells are peach, unresolved cells yellow; a `data_quality` column summarizes
+   each record.
+
+In **API mode** you also get a live agent status line (which agent is
+searching / reading / analyzing, and the query or URL), an ETA, and a **🩺
+Diagnostics** button that writes `run_summary.md` and copies a ready-to-paste
+ChatGPT analysis prompt.
+
+**What the gate rejects** (a record must survive all of these to ship):
+fabricated or missing sources (`unsourced`, `search-url`, `bad-source`),
+placeholder values, invalid ИНН checksum, merge-loss (a value the collectors
+found but the record dropped), off-taxonomy segments, insignificant "news",
+product-revenue figures with no stated method, and Collector-B independence
+failures (`b-copy`/`b-empty`/…, which trigger a fresh Collector-B pass, not a
+record edit). Transparent **estimates** are allowed: a product-revenue figure
+tagged `расчёт:`/`оценка:` in its method column is accepted without a per-figure
+URL.
+
+---
+
+## Workflow 2 — Qualitative research (tab 2)
+
+1. Load a run (or add targets), enter the **research goal**, confirm an
+   **angle** per company (competitor / customer / partner / benchmark / …).
+2. **Next qual prompt ▶** / ⚡ generates one-pagers. The model does **not**
+   browse here — it works only from the gate-accepted record, so it cannot
+   invent facts. Each claim carries a provenance basis: **[Ф] fact** (must cite
+   record fields), **[В] inference**, **[Г] hypothesis** (must carry
+   `validated_if`).
+3. A qual gate validates counts, enums, and the fact-not-in-record rule; a
+   bounded repair loop fixes rejects.
+4. **Open report** builds a `.docx`: executive summary + one page per company
+   (context, hypotheses, interview brief, 5–8 question survey, 10–15 question
+   interview guide, priorities).
+
+**Manual targets:** you can add a company that has no quantitative record via
+**➕ Add company…** (name + market segment + optional notes). Its context is
+exactly what you type (marked provenance `user-provided`); everything else is
+treated as unclear/hypothesis. Manual and run-backed targets coexist. You can
+also do qualitative/respondent work on a standalone manual-only run with no
+quantitative research at all.
+
+---
+
+## Workflow 3 — Respondent sourcing → outreach contact list (tab 2, own section)
+
+Turns the one-pagers' abstract respondent archetypes into **named, reachable
+people**. Independent of the one-pager track — needs only targets.
+
+- **Step 1** — *⚡ Find respondents* (API) or *▶ Prompt* (manual). Two groups
+  are sourced: **market-level** experts/analysts and **company-specific**
+  candidates. This stage **browses** (unlike one-pager design). For each
+  candidate it runs a small bounded contact search (Telegram → phone → email →
+  LinkedIn) and stops at one or two usable published channels.
+- **🔄 Run again** — start a fresh pass over the same targets even after "done";
+  new people are merged into the shortlist, previous results preserved.
+- **Step 2** — *📇 Open Excel* (the **Respondents** sheet) or *Shortlist (md)*.
+
+**Privacy is enforced by code, not just the prompt.** Contact channels are
+allowed **only** inside a candidate's `contacts` field, must be a *published*
+professional channel, and (in DeepSeek/API mode) must actually appear in a page
+the pass fetched — a fabricated address is stripped, not shipped. Emails/phones
+anywhere else in the payload are a hard reject; generic inboxes
+(`info@`/`pr@`/…) and non-current roles are rejected; duplicates are removed
+within and across files.
+
+**Excel behavior:** if the quantitative workbook exists, a **Respondents** sheet
+is added/refreshed in it; if the targets are manual-only (no workbook), a new
+workbook is created with **Respondents** as its first sheet. Manual companies
+appear only in the Respondents sheet — quantitative research is never run for
+them. Columns: target, name, role, org, why_relevant, priority, telegram, phone,
+email, linkedin, profile_url, sources, confidence, verified_on.
+
+---
+
+## Outputs (in each `logs/<run>/` folder)
+
+| File | What |
+|---|---|
+| `<date>_<market>_research.xlsx` / `.csv` | quantitative deliverable (+ Respondents sheet) |
+| `qual/*_onepager.json` / `.md` | per-company qualitative one-pagers |
+| `qual/<date>_<market>_qual_report.docx` | merged qualitative report |
+| `qual/*_respondents.json` | respondent files (market + per company) |
+| `qual/respondents_shortlist.md` | human-readable respondent shortlist + target states |
+| `run_summary.md` / `diagnostics_prompt.md` | telemetry summary + paste-ready analysis prompt |
+| `events.jsonl` | append-only per-run telemetry (source of truth for all counters) |
+| `gate_report.md`, `companies.json`, `agent_runs/` | gate report, cohort, raw A/B/record JSON |
+
+---
+
+## Configuration (`.env`, edited via Settings)
+
+- **Keys/models:** `CHEAP_API_KEY`/`CHEAP_MODEL` (OpenAI), `ANTHROPIC_API_KEY`/
+  `CLAUDE_MODEL`, `GROK_API_KEY`/`GROK_MODEL`, `DEEPSEEK_API_KEY`/`DEEPSEEK_MODEL`,
+  `SEARCH_API_KEY`/`SEARCH_PROVIDER` (Brave), `AGENT_MODE` (default provider).
+- **Cost line:** `TOKEN_PRICE_IN`/`TOKEN_PRICE_OUT` (USD per 1M tokens) — only
+  then does the run summary show an estimated cost.
+- **DeepSeek tuning:** `DS_BUDGET_DISCOVERY|COLLECTOR_A|COLLECTOR_B|REPAIR`
+  (per-stage tool-call budgets; respondents defaults to 18), `DS_BUDGET_EXTEND`
+  (earned extension), `DS_COMPANY_CONCURRENCY` (1–4 companies at once, default 1).
+
+Schema and layout are editable in the app (Settings) and in
+`config/schema.yaml`, `config/custom_fields.yaml`, `config/onepager_blocks.yaml`,
+`config/source_registry.yaml`, `config/depth_levels.yaml`.
+
+---
+
+## CLI (same state machine as the app; handy for testing)
+
 ```bash
-python build_macos_app.py                    # → "Discovery Research.app" in the repo
-python build_macos_app.py --into /Applications   # install it
-```
-This generates a proper `.app` bundle whose launcher runs `app.py` with the same
-Python you built with (so tkinter/openpyxl/pyyaml are guaranteed present) — the repo
-path and interpreter are baked in, so it keeps working after you move it. It's
-**unsigned**, so on first launch use right-click → **Open** once to clear Gatekeeper.
-Rebuild after moving the repo or changing Python environments. For a fully
-self-contained app that bundles Python (to share with a machine that has no Python),
-use `py2app` or `pyinstaller --windowed app.py` instead.
-
-Or just run it from a terminal during development:
-```bash
-python app.py           # or double-click launch_app.command
+python -m src.runs create --market "…" --depth medium         # new run
+python -m src.runs next <run_id> --batch 3                    # next Prompt-mode prompt
+python -m src.runs gate <run_id>                              # validate records
+python -m src.runs build <run_id>                             # build Excel
+python -m src.runs telemetry <run_id>                         # run summary
+python -m src.api_runner <run_id> --provider deepseek --batch 3        # ⚡ quantitative step
+python -m src.api_runner <run_id> --qual --provider deepseek           # ⚡ qualitative step
+python -m src.api_runner <run_id> --respondents --provider deepseek    # ⚡ respondent step
 ```
 
-1. Pick **model** (ChatGPT / Claude), type the **market**, choose **depth**
-   (`config/depth_levels.yaml`):
-   - **superficial** — large players only.
-   - **medium** — large + niche + regional strong players (~80% of the market).
-   - **detailed** — all real players (~90–95%), no one-person shops, filed revenue ≥ 25 млн ₽.
-2. **Generate run** → creates `logs/<run>/` with a ready-to-paste **multi-agent
-   `prompt.md`** — it runs all three agents in one go (🟦 Collector A registry/
-   financial → 🟩 Collector B news/market, independent → 🟨 Verifier merge), with the
-   market, depth, language, financial fields and save paths baked in. You paste
-   **one** prompt; no separate Collector-B prompt.
-3. Watch **progress %** (records collected ÷ discovered cohort in `companies.json`).
-4. **Build Excel** → `research_table.xlsx` + `analysis.md`; **Open Excel** opens it.
-5. **Publish to docs/ →** copies the final `.xlsx` + `analysis.md` into
-   `docs/<market>/` (the clean deliverable; `logs/` stays as history).
+Tests: `python -m unittest discover -s tests` (178 tests, offline).
 
-Same steps from the terminal: `python -m src.runs create|progress|build|analyze|publish`.
+---
 
-## Run logs (history) vs docs/ (final deliverable)
-Every run is a folder under `logs/` — a full record of *how* the research was done:
-`prompt.md`, `companies.json` (discovered cohort), `agent_runs/` (per-company A/B/
-verifier JSON with sources + snippets + flags), `events.jsonl` (timeline),
-`research_table.xlsx/.csv`, and **`analysis.md`**. **Publish** promotes the finished
-result to `docs/<market>/` — that folder is the deliverable; `logs/` is history.
+## Current limitations
 
-`analysis.md` is the architect's read: registry/financial fill (legal name / INN /
-2025 revenue / headcount), a **source-domain histogram** (over-reliance on company
-sites is the usual cause of empty INN/revenue), a per-company breakdown, plus flags
-for wrong-language prose, entity/product-vs-legal tensions, empty Collector-B passes,
-and contaminated repo-path sources. Recurring flags → tighten the rule in `prompts/`
-or the run prompt, not just the one run.
+- **Live coverage is partial.** Quantitative + respondent flows are validated
+  live on DeepSeek; the qualitative one-pager loop is exercised in tests and one
+  live company, not a full multi-company live run. See `HANDOFF.md`.
+- **Brave free quota** (~2,000 req/month) ≈ one medium-depth DeepSeek run. On
+  HTTP 402 the app stops searching, keeps using already-opened pages, leaves
+  unresolved fields blank (yellow), and says so — it does not silently degrade.
+- **Contact grounding is DeepSeek-only.** In Prompt mode the app cannot verify
+  what the web chat browsed, so contact text-grounding applies to the app-tools
+  (DeepSeek) path.
+- **OpenAI billing** on the owner's account is currently inactive (external), so
+  the gpt provider path is verified by construction, not live.
+- **Goal-based Auto mode** (one button that drives all stages to completion) is
+  designed-for but not built; the telemetry needed for it is in place.
 
-## Output — a table, not a Markdown report
-The client-facing deliverable is a **spreadsheet, one row per company**. Either
-render the researcher's filled CSV, or pivot a local pipeline run straight from the
-KB:
-```bash
-python -m src.export_excel --template outputs/gpu_iaas_ru.csv        # blank GPU table to fill
-python -m src.export_excel --csv outputs/gpu_iaas_ru.csv --out docs/test_gpu/GPU_IaaS_RU.xlsx
-python -m src.export_excel --from-kb --out docs/test_gpu/GPU_IaaS_RU.xlsx   # after a real run
-```
-`GPU_IaaS_RU.xlsx` has a frozen header, auto-filter, wrapped cells, and highlights
-low-confidence rows. The CSV is **Airtable-ready** — import it directly as a table.
+---
 
-See `docs/researcher_codex_manual.md` for the **market-agnostic** manual the
-researcher (GPT-5.5) follows in Codex for *any* market, and `docs/test_run_plan.md`
-for the GPU worked example. To point the pipeline at a new market, the administrator
-edits three files: `config/schema.yaml` (fields, `geo`, and **`output_language`** —
-the language of free-text values; proper names stay verbatim), `inputs/input_entities.csv`
-(the seed companies), and `config/source_registry.yaml` (trusted sources).
-
-**Blinding rule:** the researcher works from live public sources only and never
-reads `docs/gold/*`; the gold set is the administrator's yardstick, opened only to
-score a finished run. **Coverage rule:** Collector A must actually open the registry
-(ЕГРЮЛ/Rusprofile) and filing (bo.nalog.ru) — a blank INN/revenue because "no
-source was opened" is a coverage failure, not an honest blank.
+For system internals and invariants see **`ARCHITECTURE.md`**; for project state,
+milestones, and next steps see **`HANDOFF.md`**.
