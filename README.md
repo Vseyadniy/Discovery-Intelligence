@@ -202,9 +202,20 @@ python -m src.runs telemetry <run_id>                         # run summary
 python -m src.api_runner <run_id> --provider deepseek --batch 3        # ⚡ quantitative step
 python -m src.api_runner <run_id> --qual --provider deepseek           # ⚡ qualitative step
 python -m src.api_runner <run_id> --respondents --provider deepseek    # ⚡ respondent step
+python -m src.auto <run_id>                                   # Auto v1: drive the quant
+                                                              # run to a terminal state
+python -m src.auto --market "…" --depth medium                # …creating the run first
 ```
 
-Tests: `python -m unittest discover -s tests` (178 tests, offline).
+Auto v1 (quantitative only, DeepSeek, sequential) repeats the ⚡ step until a
+deterministic terminal state: `complete` / `complete-with-gaps` (Excel built),
+`needs-review` (repair caps exhausted), `stopped-quota` / `-provider` /
+`-budget` / `-no-progress`, or `blocked-input`. Limits: `--max-steps`,
+`--max-minutes`, `--max-tool-calls`, `--max-tokens`. On Brave quota exhaustion
+it finishes the repair/blank path for already-researched companies and stops
+before starting new ones. Every decision is logged to `events.jsonl`.
+
+Tests: `python -m unittest discover -s tests` (200 tests, offline).
 
 ---
 
@@ -221,8 +232,9 @@ Tests: `python -m unittest discover -s tests` (178 tests, offline).
   (DeepSeek) path.
 - **OpenAI billing** on the owner's account is currently inactive (external), so
   the gpt provider path is verified by construction, not live.
-- **Goal-based Auto mode** (one button that drives all stages to completion) is
-  designed-for but not built; the telemetry needed for it is in place.
+- **Goal-based Auto mode** is partially built: v1 (`python -m src.auto`) drives
+  the **quantitative** track to a terminal state (CLI only, DeepSeek only, no
+  Pause/Stop). Qual/respondent orchestration and the one-button UI are next.
 
 ---
 

@@ -4,7 +4,7 @@
 
 `9106072` — "Rerun respondent sourcing over the same targets after «done»".
 Branch `main`, pushed to `origin` (github.com/Vseyadniy/Discovery-Intelligence).
-Test suite: **178 tests, all passing offline** (`python -m unittest discover -s tests`).
+Test suite: **200 tests, all passing offline** (`python -m unittest discover -s tests`).
 Standing rule: commit + push every iteration; never commit `.env`,
 `db/kb.sqlite`, `logs/`, `dist/`, built `.app`.
 
@@ -75,13 +75,17 @@ Standing rule: commit + push every iteration; never commit `.env`,
    one-pagers → repairs → report, then respondents → Excel. Confirm the qual
    repair loop converges and the report renders; this is the last major
    unvalidated live path.
-2. **Goal-based Auto mode** (deferred feature, not yet built): one action that
-   drives quant → qual → respondents to completion, deciding per stage whether
-   to advance / repair / stop, using the existing telemetry (failure categories
-   + spend, repair outcomes sig/sig_after, run_complete, quality states, budget
-   signals). The needed signals are already recorded; Auto mode is the
-   orchestration layer on top. Keep the existing bounded-repair and
-   spend-guard invariants — do not let Auto mode loop or exhaust budgets.
+2. **Goal-based Auto mode** — v1 SHIPPED for the quantitative track
+   (`src/auto.py`, `python -m src.auto <run_id>` or `--market "…"`):
+   controller loop over `run_next_step`/`build_excel` with snapshot-diff
+   progress detection, run-level limits (steps / wall time / tool calls /
+   tokens), quota-safe `no_new_research` resolution path, and terminal states
+   `complete`, `complete-with-gaps`, `needs-review`, `stopped-quota`,
+   `stopped-provider`, `stopped-budget`, `stopped-no-progress`,
+   `blocked-input` — all decisions logged as `auto_*` events. DeepSeek-only,
+   strictly sequential, CLI-only (no UI button until Pause/Stop exists).
+   **Next Auto milestones:** live smoke run, qual + respondent orchestration,
+   UI button with Pause/Resume/Stop, per-run spend cap in ₽/$.
 3. **Repo hygiene**: remove the legacy KB/outputs paths and stale `docs/` MVP
    files so the tree matches the current product.
 

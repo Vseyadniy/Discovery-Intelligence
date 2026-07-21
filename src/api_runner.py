@@ -262,8 +262,12 @@ def _ground(obj: dict, log, label: str, only_fields=None) -> dict:
 
 
 def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
-                  log=print) -> str:
-    """Execute the run's current step via API. Returns a one-line summary."""
+                  log=print, no_new_research: bool = False) -> str:
+    """Execute the run's current step via API. Returns a one-line summary.
+    `no_new_research`: skip the per-company research branch and advance only
+    the gate/repair/blank path for records already on disk — Auto mode's
+    quota-safe resolution path (never starts a fresh company under a dead
+    search quota). Default False keeps the manual ⚡ behavior unchanged."""
     if provider:
         mr.set_mode(provider)
     meta = runs._load_meta(run_dir)
@@ -303,7 +307,7 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
     # Research passes take minutes each — files save incrementally, and one
     # failed company never loses the others' work.
     pending = runs._pending_brands(run_dir, brands)
-    if pending:
+    if pending and not no_new_research:
         import time
         from concurrent.futures import ThreadPoolExecutor
         seg_by_brand = {}
@@ -616,6 +620,13 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
         if web_tools.QUOTA_EXHAUSTED:
             summary += _QUOTA_SUMMARY
         return summary
+
+    if pending:
+        # only reachable with no_new_research=True: the researched subset's
+        # repairs settled, but the cohort is incomplete — never log
+        # run_complete for a partial cohort
+        return (f"repairs settled — {len(pending)} of {len(brands)} companies "
+                f"still unresearched (new research withheld)")
 
     # everything accepted — record the run's terminal quality state once
     # (field NAMES only, deduped so repeated ⚡ presses don't re-log it)
