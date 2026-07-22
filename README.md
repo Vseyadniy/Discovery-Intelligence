@@ -231,7 +231,21 @@ companies and stops before starting new ones. Ctrl-C logs `auto_interrupted`
 (with observable spend; in-flight pass usage marked incomplete) and preserves
 all completed artifacts.
 
-Tests: `python -m unittest discover -s tests` (222 tests, offline).
+**Auto in the app (tab 1, section «4 · Auto»).** Works on the run currently
+created/loaded in tab 1 — any quantitative run. **🔭 Preview plan** shows the
+read-only plan in the prompt pane (zero API calls); **▶ Start / Resume Auto**
+runs the same controller with pop-up approvals (paid start, then scope
+approval with the discovered companies + segments after discovery);
+**⏸ Pause** / **⏹ Stop** end the session cleanly after the current company —
+nothing is half-written, and pressing Start later (even after restarting the
+app) resumes exactly where it stopped, because all state lives in the run
+folder. Progress, live spend (tool calls / tokens vs limits), and the final
+outcome show under the buttons; on completion the app offers to open the
+Excel. While Auto runs, the manual ⚡/Build buttons are parked. Runs created
+for Auto keep the legacy `model` field as the Prompt-mode paste target; the
+Auto execution provider is recorded separately (`auto_provider` in run.json).
+
+Tests: `python -m unittest discover -s tests` (233 tests, offline).
 
 ---
 

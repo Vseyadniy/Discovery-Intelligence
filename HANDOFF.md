@@ -4,7 +4,7 @@
 
 `9106072` — "Rerun respondent sourcing over the same targets after «done»".
 Branch `main`, pushed to `origin` (github.com/Vseyadniy/Discovery-Intelligence).
-Test suite: **222 tests, all passing offline** (`python -m unittest discover -s tests`).
+Test suite: **233 tests, all passing offline** (`python -m unittest discover -s tests`).
 Standing rule: commit + push every iteration; never commit `.env`,
 `db/kb.sqlite`, `logs/`, `dist/`, built `.app`.
 
@@ -96,9 +96,18 @@ Standing rule: commit + push every iteration; never commit `.env`,
    marked incomplete) + clean exit 130. That interrupted run is resumable:
    BPMSoft + Directum records survive (both gate-rejected, repairable), 5
    companies pending — `--plan` shows the exact state.
-   **Next Auto milestones:** live smoke run (now behind approvals), qual +
-   respondent orchestration, UI button with Pause/Resume/Stop, per-run spend
-   cap in ₽/$.
+   **App integration (2026-07-22):** tab 1 gained «4 · Auto» — Preview plan
+   (read-only), Start/Resume, Pause, Stop. The buttons drive the same
+   `auto_run`: approvals arrive as dialogs (paid start + scope review with
+   cohort/segments), `AutoControl` pauses/stops cleanly between companies,
+   `on_status` shows step/company/spend vs limits live, completion offers the
+   Excel, and resume-after-app-restart works because all state is in the run
+   folder. `create_auto_run` fixed the legacy-model mismatch: `model` stays a
+   valid Prompt-mode paste target, the executor is recorded as
+   `auto_provider: deepseek`. Manual ⚡/Build are parked while Auto owns the
+   run.
+   **Next Auto milestones:** controlled live test through the app, qual +
+   respondent orchestration, per-run spend cap in ₽/$.
 3. **Repo hygiene**: remove the legacy KB/outputs paths and stale `docs/` MVP
    files so the tree matches the current product.
 

@@ -46,10 +46,21 @@ Terminal states (AutoResult.state):
                       calls, tokens)
   stopped-no-progress consecutive steps changed nothing observable, past the
                       pipeline's own bounded-repair guards
+  paused              the user asked to pause (AutoControl) — the session
+                      ended cleanly after the current company; a new
+                      auto_run on the same folder resumes exactly there
+  stopped-user        the user asked to stop (AutoControl) — same clean
+                      boundary as paused, different intent label
   interrupted         Ctrl-C — logged and exited cleanly (code 130)
   blocked-input       a setup problem or a missing approval the controller
                       cannot supply itself (keys, provider, confirmation,
                       SystemExit from the pipeline)
+
+Pause/resume/stop need no persistent session: the state machine lives in
+files, so «resume» is simply a new auto_run over the same run folder (the
+scope approval is persisted in run.json). AutoControl only asks the loop to
+end at the next between-companies checkpoint — an in-flight pass is never
+killed, so no artifact is ever half-written.
 
 v1 invariants: DeepSeek only, strictly sequential (company concurrency forced
 to 1 AND one company per step), quantitative research + Excel only, no
@@ -62,6 +73,7 @@ import argparse
 import json
 import os
 import sys
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -102,6 +114,43 @@ class AutoResult:
     steps: int
     seconds: int
     xlsx: str = ""
+
+
+class AutoControl:
+    """Cooperative pause/stop for a running auto session (thread-safe).
+    The controller checks it at every between-companies checkpoint — a
+    request never kills an in-flight pass, it ends the session cleanly
+    after the current company. Resume = a new auto_run on the same folder."""
+
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._request = ""            # "" | "pause" | "stop"
+
+    def request_pause(self) -> None:
+        with self._lock:
+            if not self._request:     # stop wins over a later pause
+                self._request = "pause"
+
+    def request_stop(self) -> None:
+        with self._lock:
+            self._request = "stop"
+
+    @property
+    def requested(self) -> str:
+        with self._lock:
+            return self._request
+
+
+def create_auto_run(market: str, depth: str) -> Path:
+    """Create a run for Auto. The legacy `model` field keeps its Prompt-mode
+    meaning (which web chat a pasted prompt targets) and stays at the default,
+    so the run remains a normal run in every other workflow; the Auto
+    execution provider is recorded separately as `auto_provider`."""
+    run_dir = runs.create_run(market, depth, "chatgpt")
+    meta = runs._load_meta(run_dir)
+    meta["auto_provider"] = "deepseek"
+    runs._save_meta(run_dir, meta)
+    return run_dir
 
 
 def exit_code_for(state: str) -> int:
@@ -311,16 +360,30 @@ def plan(run_dir: Path, limits: AutoLimits | None = None) -> str:
     return "\n".join(out)
 
 
+def _notify(cb, **kw) -> None:
+    """Optional status callback (UI) — never allowed to break the session."""
+    if cb is None:
+        return
+    try:
+        cb(kw)
+    except Exception:
+        pass
+
+
 # ── the controller ────────────────────────────────────────────────────────────
 def auto_run(run_dir: Path, provider: str = "deepseek",
              limits: AutoLimits | None = None, log=print,
              unattended: bool = False, approve_scope: bool = False,
-             finalize_only: bool = False, confirm=None) -> AutoResult:
+             finalize_only: bool = False, confirm=None,
+             control: AutoControl | None = None, on_status=None) -> AutoResult:
     """Drive the quantitative run to a terminal state, one company per
     decision. `confirm` is an optional callable(message)->bool used for
     interactive approvals; without it, paid work needs `unattended` (--yes)
     or `approve_scope`. `finalize_only` restricts the session to
-    deterministic gate checks + Excel (guaranteed zero LLM/search calls)."""
+    deterministic gate checks + Excel (guaranteed zero LLM/search calls).
+    `control` (AutoControl) allows a cooperative pause/stop between
+    companies; `on_status` (callable(dict)) receives progress + spend after
+    every decision and step — both are optional and UI-oriented."""
     lim = limits or AutoLimits()
     t0 = time.time()
     steps = 0
@@ -389,6 +452,16 @@ def auto_run(run_dir: Path, provider: str = "deepseek",
                         "SEARCH_API_KEY is missing — DeepSeek research runs on "
                         "the app-side web_search tool (Brave key in Settings)")
 
+    # record the Auto execution provider on the run WITHOUT touching the
+    # legacy `model` field (that one means «Prompt-mode paste target»)
+    try:
+        meta0 = runs._load_meta(run_dir)
+        if meta0.get("auto_provider") != "deepseek":
+            meta0["auto_provider"] = "deepseek"
+            runs._save_meta(run_dir, meta0)
+    except Exception:
+        pass
+
     mr.set_mode("deepseek")
     prev_conc = os.environ.get("DS_COMPANY_CONCURRENCY")
     os.environ["DS_COMPANY_CONCURRENCY"] = "1"   # v1: strictly sequential
@@ -404,6 +477,14 @@ def auto_run(run_dir: Path, provider: str = "deepseek",
     current = {"action": "", "company": "", "before": None, "in_step": False}
     try:
         while True:
+            # user pause/stop — the between-companies checkpoint
+            req = control.requested if control is not None else ""
+            if req:
+                return terminal(
+                    "paused" if req == "pause" else "stopped-user",
+                    f"{req} requested — session ended at a clean company "
+                    f"boundary; start Auto again on this run to resume")
+
             # run-level ceilings, checked before spending anything more
             if steps >= lim.max_steps:
                 return terminal("stopped-budget",
@@ -438,6 +519,12 @@ def auto_run(run_dir: Path, provider: str = "deepseek",
                 + (f" · {company}" if company else "")
                 + f" (pending {before['pending']}, accepted {before['accepted']}, "
                   f"rejected {before['rejected']})")
+            _notify(on_status, phase="deciding", step=steps + 1, action=action,
+                    company=company, pending=before["pending"],
+                    accepted=before["accepted"], rejected=before["rejected"],
+                    tool_calls=used["tool_calls"], tokens=used["tokens"],
+                    max_steps=lim.max_steps, max_tool_calls=lim.max_tool_calls,
+                    max_tokens=lim.max_tokens)
 
             if action == "stop-quota":
                 if before["brands"] == 0:
@@ -462,10 +549,19 @@ def auto_run(run_dir: Path, provider: str = "deepseek",
                         log(f"[auto] segments: {', '.join(segments)}")
                     mode = ("unattended" if unattended else
                             "flag" if approve_scope else "")
-                    if not mode and confirm is not None and confirm(
-                            f"Approve this scope ({len(brands)} companies) for "
-                            f"paid per-company research?"):
-                        mode = "interactive"
+                    if not mode and confirm is not None:
+                        # the review happens IN the question: cohort + segments
+                        listing = "\n".join(f"  • {b}" for b in brands[:20])
+                        if len(brands) > 20:
+                            listing += f"\n  … and {len(brands) - 20} more"
+                        if confirm(
+                                f"Discovery found {len(brands)} companies:\n"
+                                f"{listing}\n"
+                                + (f"Segments: {', '.join(segments)}\n"
+                                   if segments else "")
+                                + "\nApprove this scope for paid per-company "
+                                  "research?"):
+                            mode = "interactive"
                     if not mode:
                         return terminal(
                             "awaiting-scope-approval",
@@ -536,6 +632,11 @@ def auto_run(run_dir: Path, provider: str = "deepseek",
             du = _usage(new_events)
             used["tool_calls"] += du["tool_calls"]
             used["tokens"] += du["tokens"]
+            _notify(on_status, phase="step-done", step=steps, action=action,
+                    company=company, tool_calls=used["tool_calls"],
+                    tokens=used["tokens"], max_steps=lim.max_steps,
+                    max_tool_calls=lim.max_tool_calls,
+                    max_tokens=lim.max_tokens, note=last_note[:160])
 
             failed_step, cats = _step_failure(new_events)
             if exc_cat:
@@ -642,7 +743,7 @@ def main() -> None:
     ap.add_argument("--max-tokens", type=int, default=AutoLimits.max_tokens)
     args = ap.parse_args()
     if args.market:
-        run_dir = runs.create_run(args.market, args.depth, "deepseek")
+        run_dir = create_auto_run(args.market, args.depth)
         print(f"created run: {run_dir.name}")
     elif args.run_id:
         run_dir = runs.run_dir_for(args.run_id)

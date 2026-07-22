@@ -28,6 +28,7 @@ from tkinter import messagebox, ttk
 
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
+from src import auto          # noqa: E402
 from src import runs          # noqa: E402
 from src import onepager      # noqa: E402
 from src import model_router as _mr   # noqa: E402,F401  (side effect: loads .env)
@@ -67,8 +68,10 @@ class App:
         self.root = root
         self.run_dir: Path | None = None
         self._poll_id = None
+        self._auto_running = False
+        self.auto_control: auto.AutoControl | None = None
         root.title("Discovery Research Launcher")
-        root.geometry("880x780")
+        root.geometry("880x860")
         self.depths = runs.load_depths()
 
         nb = ttk.Notebook(root)
@@ -225,6 +228,35 @@ class App:
         self.gate_btn.grid(row=0, column=3, padx=4)
         self.publish_btn = ttk.Button(act, text="Publish to docs/ →", command=self.on_publish, state="disabled")
         self.publish_btn.grid(row=0, column=4, padx=4)
+
+        # ── 4 · Auto: hands-off quantitative research over the SAME run and
+        # state machine — the buttons only start/pause a controller loop; all
+        # gate/repair/budget behavior is identical to pressing ⚡ repeatedly.
+        ttk.Separator(frm, orient="horizontal").grid(
+            row=15, column=0, columnspan=3, sticky="we", pady=8)
+        ttk.Label(frm, text="4 · Auto — hands-off research (DeepSeek ⚡, "
+                            "asks before spending)", font=("", 13, "bold")).grid(
+            row=16, column=0, columnspan=3, sticky="w", **pad)
+        auf = ttk.Frame(frm)
+        auf.grid(row=17, column=0, columnspan=3, sticky="w", **pad)
+        self.auto_plan_btn = ttk.Button(auf, text="🔭 Preview plan (free)",
+                                        command=self.on_auto_plan)
+        self.auto_plan_btn.grid(row=0, column=0, padx=4)
+        self.auto_start_btn = ttk.Button(auf, text="▶ Start / Resume Auto",
+                                         command=self.on_auto_start)
+        self.auto_start_btn.grid(row=0, column=1, padx=4)
+        self.auto_pause_btn = ttk.Button(auf, text="⏸ Pause", state="disabled",
+                                         command=self.on_auto_pause)
+        self.auto_pause_btn.grid(row=0, column=2, padx=4)
+        self.auto_stop_btn = ttk.Button(auf, text="⏹ Stop", state="disabled",
+                                        command=self.on_auto_stop)
+        self.auto_stop_btn.grid(row=0, column=3, padx=4)
+        self.auto_lbl = ttk.Label(frm, text="Preview the plan, then Start — Auto "
+                                            "asks before any paid work and stops "
+                                            "for scope approval after discovery.",
+                                  foreground="#666", wraplength=820, justify="left")
+        self.auto_lbl.grid(row=18, column=0, columnspan=3, sticky="w", **pad)
+
         frm.columnconfigure(1, weight=1)
         self._apply_mode()
 
@@ -312,6 +344,11 @@ class App:
         if not self.run_dir:
             messagebox.showinfo("No run", "Generate or load a run first.")
             return
+        if self._auto_running:
+            messagebox.showinfo("Auto is running",
+                                "Auto owns this run right now — pause or stop "
+                                "it before stepping manually.")
+            return
         provider = self.provider.get()
         self.api_start_btn.configure(state="disabled")
         self.agent_lbl.configure(text=f"⚡ starting ({provider})…")
@@ -379,6 +416,11 @@ class App:
     def on_build(self):
         if not self.run_dir:
             return
+        if self._auto_running:
+            messagebox.showinfo("Auto is running",
+                                "Auto owns this run right now — pause or stop "
+                                "it before building manually.")
+            return
         self.status.set("Building Excel…")
 
         def work():
@@ -427,6 +469,122 @@ class App:
     def on_open_gate(self):
         if self.run_dir and (self.run_dir / "gate_report.md").exists():
             open_path(self.run_dir / "gate_report.md")
+
+    # ── tab-1 · Auto controller (quantitative only) ──────────────────────────
+    def on_auto_plan(self):
+        """Read-only preview of what Auto would do — never calls an API."""
+        if not self.run_dir:
+            messagebox.showinfo("No run", "Generate or load a run first.")
+            return
+        self.status.set("Building the Auto plan (read-only)…")
+
+        def work():
+            try:
+                text = auto.plan(self.run_dir)
+            except Exception as e:
+                self.root.after(0, lambda: messagebox.showwarning("Plan failed", str(e)))
+                return
+            self.root.after(0, lambda: (
+                self._show_prompt(text),
+                self.status.set("Auto plan shown above — read-only, no API calls were made.")))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _ui_confirm(self, msg: str) -> bool:
+        """auto_run's confirm callback: the worker thread blocks while the
+        question is asked on the Tk main thread. Used for the paid-start
+        confirmation and the post-discovery scope approval (the message
+        already contains the cohort + segments to review)."""
+        ev = threading.Event()
+        ans = {"ok": False}
+
+        def ask():
+            ans["ok"] = messagebox.askyesno("Auto — approval required", msg)
+            ev.set()
+        self.root.after(0, ask)
+        ev.wait()
+        return ans["ok"]
+
+    def on_auto_start(self):
+        if not self.run_dir:
+            messagebox.showinfo("No run", "Generate or load a run first "
+                                          "(any quantitative run works).")
+            return
+        if self._auto_running:
+            return
+        self._auto_running = True
+        self.auto_control = auto.AutoControl()
+        self.auto_start_btn.configure(state="disabled")
+        self.auto_pause_btn.configure(state="normal")
+        self.auto_stop_btn.configure(state="normal")
+        # one executor at a time: the turn-based ⚡ and Build stay off while
+        # the Auto loop owns the run
+        self.api_start_btn.configure(state="disabled")
+        self.build_btn.configure(state="disabled")
+        self.auto_lbl.configure(text="▶ Auto running — approvals will pop up "
+                                     "before any paid work.")
+        self._start_poll()
+
+        def log(msg):
+            self.root.after(0, lambda: (self.agent_lbl.configure(text=msg),
+                                        self.status.set(msg)))
+
+        def on_status(st):
+            lim_tc = st.get("max_tool_calls") or 0
+            txt = (f"step {st.get('step', '?')}/{st.get('max_steps', '?')}"
+                   f" · {st.get('action', '')}"
+                   + (f" · {st['company']}" if st.get("company") else "")
+                   + f" · spend: {st.get('tool_calls', 0)}"
+                   + (f"/{lim_tc}" if lim_tc else "") + " tool calls"
+                   + (f", {st.get('tokens', 0):,} tokens".replace(",", " ")
+                      if st.get("tokens") else ""))
+            self.root.after(0, lambda: self.auto_lbl.configure(text=txt))
+
+        def work():
+            try:
+                res = auto.auto_run(self.run_dir, log=log,
+                                    confirm=self._ui_confirm,
+                                    control=self.auto_control,
+                                    on_status=on_status)
+            except Exception as e:      # controller bugs must not hang the UI
+                res = auto.AutoResult("blocked-input", f"controller error: {e}", 0, 0)
+            self.root.after(0, lambda: self._auto_done(res))
+        threading.Thread(target=work, daemon=True).start()
+
+    def _auto_done(self, res):
+        self._auto_running = False
+        self.auto_control = None
+        self.auto_start_btn.configure(state="normal")
+        self.auto_pause_btn.configure(state="disabled")
+        self.auto_stop_btn.configure(state="disabled")
+        self.api_start_btn.configure(state="normal")
+        self.build_btn.configure(state="normal")
+        icon = "✅" if res.state.startswith("complete") else \
+               "⏸" if res.state == "paused" else "■"
+        self.auto_lbl.configure(text=f"{icon} {res.state} — {res.reason}")
+        self.status.set(f"Auto: {res.state}")
+        if res.state.startswith("complete") and res.xlsx:
+            self._built(Path(res.xlsx))
+            if messagebox.askyesno("Auto complete",
+                                   f"{res.reason}\n\nOpen the Excel now?"):
+                open_path(Path(res.xlsx))
+        elif res.state in ("paused", "awaiting-scope-approval"):
+            self.status.set(f"Auto: {res.state} — press «▶ Start / Resume Auto» "
+                            f"to continue (state is saved in the run folder)")
+
+    def on_auto_pause(self):
+        if self.auto_control:
+            self.auto_control.request_pause()
+            self.auto_pause_btn.configure(state="disabled")
+            self.auto_lbl.configure(text="⏸ pausing — finishing the current "
+                                         "company, then stopping cleanly…")
+
+    def on_auto_stop(self):
+        if self.auto_control:
+            self.auto_control.request_stop()
+            self.auto_pause_btn.configure(state="disabled")
+            self.auto_stop_btn.configure(state="disabled")
+            self.auto_lbl.configure(text="⏹ stopping — finishing the current "
+                                         "company, then stopping cleanly…")
 
     # ══ tab 2 · qualitative research ═════════════════════════════════════════
     def _build_qual_tab(self, frm: ttk.Frame):
