@@ -4,7 +4,7 @@
 
 `9106072` — "Rerun respondent sourcing over the same targets after «done»".
 Branch `main`, pushed to `origin` (github.com/Vseyadniy/Discovery-Intelligence).
-Test suite: **200 tests, all passing offline** (`python -m unittest discover -s tests`).
+Test suite: **222 tests, all passing offline** (`python -m unittest discover -s tests`).
 Standing rule: commit + push every iteration; never commit `.env`,
 `db/kb.sqlite`, `logs/`, `dist/`, built `.app`.
 
@@ -84,8 +84,21 @@ Standing rule: commit + push every iteration; never commit `.env`,
    `stopped-provider`, `stopped-budget`, `stopped-no-progress`,
    `blocked-input` — all decisions logged as `auto_*` events. DeepSeek-only,
    strictly sequential, CLI-only (no UI button until Pause/Stop exists).
-   **Next Auto milestones:** live smoke run, qual + respondent orchestration,
-   UI button with Pause/Resume/Stop, per-run spend cap in ₽/$.
+   **Safety hardening (after the first live run, 2026-07-21):** the run
+   `2026-07-09_2346_saas-bpm_superficial` showed Auto spending without
+   confirmation (discovery + 2 of 7 companies ≈ 2.4M tokens in before Ctrl-C,
+   which crashed unlogged). Now: paid work requires `--yes`/`--approve-scope`/
+   interactive confirmation; Auto stops at `awaiting-scope-approval` after
+   discovery until the cohort is approved (persisted in run.json); one company
+   per controller decision; `--plan` (read-only preview) and `--finalize-only`
+   (deterministic gate + Excel, provably zero LLM/search calls); Ctrl-C →
+   `auto_interrupted` event (action, company, snapshot, spend; in-flight pass
+   marked incomplete) + clean exit 130. That interrupted run is resumable:
+   BPMSoft + Directum records survive (both gate-rejected, repairable), 5
+   companies pending — `--plan` shows the exact state.
+   **Next Auto milestones:** live smoke run (now behind approvals), qual +
+   respondent orchestration, UI button with Pause/Resume/Stop, per-run spend
+   cap in ₽/$.
 3. **Repo hygiene**: remove the legacy KB/outputs paths and stale `docs/` MVP
    files so the tree matches the current product.
 

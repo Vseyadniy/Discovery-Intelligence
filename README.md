@@ -202,20 +202,36 @@ python -m src.runs telemetry <run_id>                         # run summary
 python -m src.api_runner <run_id> --provider deepseek --batch 3        # ⚡ quantitative step
 python -m src.api_runner <run_id> --qual --provider deepseek           # ⚡ qualitative step
 python -m src.api_runner <run_id> --respondents --provider deepseek    # ⚡ respondent step
+python -m src.auto <run_id> --plan                            # read-only preview (no API)
 python -m src.auto <run_id>                                   # Auto v1: drive the quant
                                                               # run to a terminal state
-python -m src.auto --market "…" --depth medium                # …creating the run first
+python -m src.auto --market "…" --depth medium --yes          # …creating the run first
+python -m src.auto <run_id> --finalize-only                   # gate + Excel only, zero spend
 ```
 
-Auto v1 (quantitative only, DeepSeek, sequential) repeats the ⚡ step until a
-deterministic terminal state: `complete` / `complete-with-gaps` (Excel built),
-`needs-review` (repair caps exhausted), `stopped-quota` / `-provider` /
-`-budget` / `-no-progress`, or `blocked-input`. Limits: `--max-steps`,
-`--max-minutes`, `--max-tool-calls`, `--max-tokens`. On Brave quota exhaustion
-it finishes the repair/blank path for already-researched companies and stops
-before starting new ones. Every decision is logged to `events.jsonl`.
+Auto v1 (quantitative only, DeepSeek, **one company per step**) repeats the ⚡
+step until a deterministic terminal state: `complete` / `complete-with-gaps`
+(Excel built), `needs-review` (repair caps exhausted),
+`awaiting-scope-approval` (see below), `stopped-quota` / `-provider` /
+`-budget` / `-no-progress`, `interrupted` (Ctrl-C, exit 130), or
+`blocked-input`. Limits: `--max-steps`, `--max-minutes`, `--max-tool-calls`,
+`--max-tokens`; limits, stop signals, and snapshots are re-checked between
+every company. Every decision is logged to `events.jsonl`.
 
-Tests: `python -m unittest discover -s tests` (200 tests, offline).
+**Spending is opt-in.** Paid work (discovery/research/repair) needs `--yes`
+(alias `--unattended` — the fully autonomous behavior), `--approve-scope`, or
+an interactive y/N confirmation. After discovery Auto **stops at
+`awaiting-scope-approval`**, shows the cohort + segments, and researches
+nothing until the scope is approved (persisted in the run, so a re-run
+continues). `--plan` previews state, next actions, and an upper-bound plan
+without any API call; `--finalize-only` allows only deterministic gate checks
+and Excel and refuses if research or model repair would be needed. On Brave
+quota exhaustion Auto finishes the repair/blank path for already-researched
+companies and stops before starting new ones. Ctrl-C logs `auto_interrupted`
+(with observable spend; in-flight pass usage marked incomplete) and preserves
+all completed artifacts.
+
+Tests: `python -m unittest discover -s tests` (222 tests, offline).
 
 ---
 

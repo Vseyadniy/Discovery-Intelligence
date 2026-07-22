@@ -100,7 +100,7 @@ class TestPreflightBlocked(unittest.TestCase):
                  patch.object(api_runner, "run_next_step",
                               side_effect=SystemExit("discovery response lacked "
                                                      "companies/segments")):
-                res = auto.auto_run(rd, log=lambda *a: None)
+                res = auto.auto_run(rd, log=lambda *a: None, unattended=True)
         self.assertEqual(res.state, "blocked-input")
         self.assertIn("companies/segments", res.reason)
         self.assertEqual(res.steps, 1)
@@ -121,7 +121,7 @@ class TestCompletion(unittest.TestCase):
              patch.object(auto.web_tools, "QUOTA_EXHAUSTED", False), \
              patch.object(api_runner, "run_next_step", side_effect=fake_step), \
              patch.object(auto.runs, "build_excel", return_value=xlsx):
-            return auto.auto_run(rd, log=lambda *a: None)
+            return auto.auto_run(rd, log=lambda *a: None, unattended=True)
 
     def test_complete_no_gaps(self):
         with tempfile.TemporaryDirectory() as td:
@@ -162,7 +162,7 @@ class TestNoProgressAndLimits(unittest.TestCase):
                  patch.object(auto.web_tools, "QUOTA_EXHAUSTED", False), \
                  patch.object(api_runner, "run_next_step",
                               return_value="researched 0/1: —"):
-                res = auto.auto_run(rd, log=lambda *a: None,
+                res = auto.auto_run(rd, log=lambda *a: None, unattended=True,
                                     limits=AutoLimits(no_progress_steps=2))
         self.assertEqual(res.state, "stopped-no-progress")
         self.assertEqual(res.steps, 2)
@@ -179,7 +179,7 @@ class TestNoProgressAndLimits(unittest.TestCase):
             with patch.object(auto, "snapshot", return_value=frozen), \
                  patch.object(auto.web_tools, "QUOTA_EXHAUSTED", False), \
                  patch.object(api_runner, "run_next_step", return_value="repaired 0"):
-                res = auto.auto_run(rd, log=lambda *a: None,
+                res = auto.auto_run(rd, log=lambda *a: None, unattended=True,
                                     limits=AutoLimits(no_progress_steps=2))
         self.assertEqual(res.state, "stopped-no-progress")
 
@@ -218,7 +218,7 @@ class TestNoProgressAndLimits(unittest.TestCase):
                  patch.object(auto.web_tools, "QUOTA_EXHAUSTED", False), \
                  patch.object(api_runner, "run_next_step",
                               side_effect=burning_step(tool_calls=500)):
-                res = auto.auto_run(rd, log=lambda *a: None,
+                res = auto.auto_run(rd, log=lambda *a: None, unattended=True,
                                     limits=AutoLimits(max_tool_calls=100))
             self.assertEqual(res.state, "stopped-budget")
             self.assertIn("tool-call limit", res.reason)
@@ -228,7 +228,7 @@ class TestNoProgressAndLimits(unittest.TestCase):
                  patch.object(auto.web_tools, "QUOTA_EXHAUSTED", False), \
                  patch.object(api_runner, "run_next_step",
                               side_effect=burning_step(tokens=90000)):
-                res = auto.auto_run(rd, log=lambda *a: None,
+                res = auto.auto_run(rd, log=lambda *a: None, unattended=True,
                                     limits=AutoLimits(max_tokens=50000))
             self.assertEqual(res.state, "stopped-budget")
             self.assertIn("token limit", res.reason)
@@ -259,7 +259,7 @@ class TestQuota(unittest.TestCase):
                  patch.object(auto.web_tools, "QUOTA_EXHAUSTED", True), \
                  patch.object(api_runner, "run_next_step",
                               return_value="repaired 1: X") as step:
-                res = auto.auto_run(rd, log=lambda *a: None)
+                res = auto.auto_run(rd, log=lambda *a: None, unattended=True)
             self.assertEqual(res.state, "stopped-quota")
             self.assertEqual(res.steps, 1)
             self.assertTrue(step.call_args.kwargs.get("no_new_research"))
@@ -276,7 +276,7 @@ class TestProviderFailures(unittest.TestCase):
                  patch.object(auto.web_tools, "QUOTA_EXHAUSTED", False), \
                  patch.object(api_runner, "run_next_step",
                               side_effect=TimeoutError("read timed out")):
-                res = auto.auto_run(rd, log=lambda *a: None,
+                res = auto.auto_run(rd, log=lambda *a: None, unattended=True,
                                     limits=AutoLimits(provider_fail_steps=2))
         self.assertEqual(res.state, "stopped-provider")
         self.assertIn("timeout", res.reason)
@@ -294,7 +294,7 @@ class TestProviderFailures(unittest.TestCase):
                               return_value=_snap(brands=1, pending=1)), \
                  patch.object(auto.web_tools, "QUOTA_EXHAUSTED", False), \
                  patch.object(api_runner, "run_next_step", side_effect=step):
-                res = auto.auto_run(rd, log=lambda *a: None,
+                res = auto.auto_run(rd, log=lambda *a: None, unattended=True,
                                     limits=AutoLimits(provider_fail_steps=2))
         self.assertEqual(res.state, "stopped-provider")
         self.assertIn("stream", res.reason)
@@ -311,7 +311,7 @@ class TestProviderFailures(unittest.TestCase):
                               return_value=_snap(brands=1, pending=1)), \
                  patch.object(auto.web_tools, "QUOTA_EXHAUSTED", False), \
                  patch.object(api_runner, "run_next_step", side_effect=step):
-                res = auto.auto_run(rd, log=lambda *a: None,
+                res = auto.auto_run(rd, log=lambda *a: None, unattended=True,
                                     limits=AutoLimits(provider_fail_steps=2,
                                                       no_progress_steps=3))
         self.assertEqual(res.state, "stopped-no-progress")
@@ -335,7 +335,7 @@ class TestNeedsReview(unittest.TestCase):
                  patch.object(auto.web_tools, "QUOTA_EXHAUSTED", False), \
                  patch.object(api_runner, "run_next_step",
                               return_value="repaired 0 · MANUAL REVIEW: X; Y"):
-                res = auto.auto_run(rd, log=lambda *a: None)
+                res = auto.auto_run(rd, log=lambda *a: None, unattended=True)
         self.assertEqual(res.state, "needs-review")
         self.assertEqual(res.steps, 1)
         self.assertIn("X", res.reason)
@@ -394,7 +394,7 @@ class TestTelemetryTrail(unittest.TestCase):
                  patch.object(auto.web_tools, "QUOTA_EXHAUSTED", False), \
                  patch.object(api_runner, "run_next_step",
                               return_value="researched 0/1"):
-                auto.auto_run(rd, log=lambda *a: None,
+                auto.auto_run(rd, log=lambda *a: None, unattended=True,
                               limits=AutoLimits(no_progress_steps=1))
             self.assertEqual(len(_events(rd, "auto_start")), 1)
             self.assertEqual(len(_events(rd, "auto_decision")), 1)
