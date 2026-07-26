@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -403,7 +404,24 @@ def analyze_saved(run_dir: str | Path, log=print) -> dict:
 
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
+def load_env_file(path: str | Path | None = None) -> None:
+    """CLI convenience: load `.env` (KEY=VALUE) with setdefault semantics so the
+    harness sees the same search keys the app saved there. Deliberately does NOT
+    import a model module — the harness stays model-free — so it reuses the same
+    minimal loader shape rather than model_router's."""
+    env = Path(path) if path else Path(__file__).resolve().parent.parent / ".env"
+    if not env.exists():
+        return
+    for line in env.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        os.environ.setdefault(k.strip(), v.strip())
+
+
 def main() -> None:
+    load_env_file()   # pick up SEARCH_* / *_API_KEY the app saved to .env
     ap = argparse.ArgumentParser(
         description="Search-only Brave/Tavily comparison harness (no model, "
                     "no research run, no fallback).")

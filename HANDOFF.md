@@ -81,13 +81,30 @@ Standing rule: commit + push every iteration; never commit `.env`,
   and **Tavily** key fields plus the **Provider** selector. Brave stays in the
   legacy shared `SEARCH_API_KEY` (preserved); Tavily saves to `TAVILY_API_KEY`;
   `_provider_key` prefers the provider-specific var and falls back to the shared
-  one. Saving/switching makes no API request and adds no fallback.
-  **Needs live validation:** no live Brave/Tavily call has been made — Tavily's
-  real response shape/field names, its live status codes for rate-limit vs
-  credit exhaustion (currently 429→rate-limit, 402→quota by assumption), and a
-  real Brave-vs-Tavily quality/latency comparison via the harness are all
-  unverified. Brave 402→sticky is unchanged and still covered offline; Brave
-  429 is now transient (behaviour change — verify against the live free tier).
+  one. Saving/switching makes no API request and adds no fallback. macOS Tk
+  paste (Cmd+V) into entry fields was fixed (`_enable_edit_shortcuts`).
+  **Tavily live smoke — PASSED (2026-07-27):** 4-query Russian fixture via the
+  production adapter (`--provider tavily`), 4/4 `ok`, 8 results each, ~1.7–2.4s
+  (p50 1911 ms / p95 2355 ms), 0 malformed items, HTTP 200. Live-confirmed:
+  Bearer auth, response parsing, `content`→`snippet` normalisation, telemetry
+  (provider/latency/count/status), secret redaction (key/`tvly-`/Authorization
+  absent from all artifacts), and offline `--analyze` with zero API calls.
+  Spend: 4 Tavily credits, 0 Brave, 0 model. Artifacts: `harness_out/tavily_smoke/`
+  (gitignored, kept on disk for the later Brave run over the same fixture).
+  **Blocking defect found + fixed during the smoke:** the standalone harness CLI
+  never loaded `.env` (it is model-free, and `.env` was only loaded via
+  `model_router` import), so it failed closed with `config` errors and 0 spend;
+  `search_harness.load_env_file()` now loads `.env` (setdefault, no model
+  import) in `main()`. Regression test added.
+  **Still needs live validation:** Tavily's live status codes for rate-limit vs
+  credit exhaustion (currently 429→rate-limit, 402→quota by assumption) — not
+  hit in the smoke; a real Brave-vs-Tavily quality/latency comparison; and
+  Tavily inside a live DeepSeek Auto run. Brave 402→sticky unchanged (offline);
+  Brave 429 now transient — verify against the live free tier.
+  **Config note:** after the smoke, `.env` still had `SEARCH_PROVIDER=brave`
+  (the Tavily *key* saved, but the Provider dropdown was not on tavily at save
+  time). The Auto test requires `SEARCH_PROVIDER=tavily` persisted — re-select
+  Provider=tavily in Settings and Save before running Auto.
 - **Legacy `db/kb.sqlite` + `outputs/`** are unused by current workflows; a
   cleanup pass could remove them and the old MVP docs under `docs/`.
 - Low-severity respondent items from the audits (staleness window on

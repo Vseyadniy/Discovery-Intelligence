@@ -283,6 +283,32 @@ class TestOutputsSecretFree(unittest.TestCase):
             self.assertNotIn("tvly-SECRET", blob)
 
 
+class TestEnvLoader(unittest.TestCase):
+    """Regression (2026-07-27 smoke): the standalone harness CLI must load .env
+    so it sees the search keys the app saved — without importing a model."""
+
+    def test_loads_keys_with_setdefault_semantics(self):
+        import sys
+        with tempfile.TemporaryDirectory() as td:
+            envf = Path(td) / ".env"
+            envf.write_text("TAVILY_API_KEY=tvly-fromfile\n"
+                            "SEARCH_PROVIDER=tavily\n"
+                            "# comment\n\nBAD LINE NO EQUALS\n", encoding="utf-8")
+            with patch.dict(os.environ, {}, clear=False):
+                os.environ.pop("TAVILY_API_KEY", None)
+                os.environ["SEARCH_PROVIDER"] = "brave"   # already-set wins
+                sys.modules.pop("src.model_router", None)
+                sh.load_env_file(envf)
+                self.assertEqual(os.environ["TAVILY_API_KEY"], "tvly-fromfile")
+                self.assertEqual(os.environ["SEARCH_PROVIDER"], "brave")  # setdefault
+                # model-free contract preserved
+                self.assertNotIn("src.model_router", sys.modules)
+
+    def test_missing_env_file_is_noop(self):
+        with tempfile.TemporaryDirectory() as td:
+            sh.load_env_file(Path(td) / "nope.env")   # must not raise
+
+
 class TestPercentile(unittest.TestCase):
     def test_percentile_math(self):
         self.assertEqual(sh._percentile([], 50), 0.0)
