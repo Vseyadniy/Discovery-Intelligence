@@ -1175,17 +1175,27 @@ class App:
         self.model_deepseek = tk.StringVar(value=os.environ.get("DEEPSEEK_MODEL", "deepseek-chat"))
         ttk.Entry(frm, textvariable=self.model_deepseek, width=16).grid(row=4, column=3, sticky="w", **pad)
 
-        ttk.Label(frm, text="Search API key:").grid(row=5, column=0, sticky="w", **pad)
+        # Search keys — separate masked fields per provider; the Provider
+        # selector chooses which one a run uses (no fallback, no API call on
+        # save). Brave lives in the legacy shared SEARCH_API_KEY (preserved);
+        # Tavily has its own TAVILY_API_KEY.
+        srch = ttk.LabelFrame(frm, text="Search (DeepSeek app-side web tools)")
+        srch.grid(row=5, column=0, columnspan=4, sticky="we", **pad)
+        ttk.Label(srch, text="Brave key:").grid(row=0, column=0, sticky="w", padx=6, pady=3)
         self.key_search = tk.StringVar(value=os.environ.get("SEARCH_API_KEY", ""))
-        ttk.Entry(frm, textvariable=self.key_search, width=42, show="•").grid(
-            row=5, column=1, sticky="w", **pad)
-        sp = ttk.Frame(frm)
-        sp.grid(row=5, column=2, columnspan=2, sticky="w", **pad)
-        ttk.Label(sp, text="Provider:").grid(row=0, column=0)
+        ttk.Entry(srch, textvariable=self.key_search, width=40, show="•").grid(
+            row=0, column=1, sticky="w", padx=6, pady=3)
+        ttk.Label(srch, text="Provider:").grid(row=0, column=2, sticky="e", padx=(12, 2))
         self.search_provider = tk.StringVar(
             value=(os.environ.get("SEARCH_PROVIDER") or "brave").lower())
-        ttk.Combobox(sp, textvariable=self.search_provider, state="readonly",
-                     values=["brave", "tavily"], width=8).grid(row=0, column=1, padx=4)
+        ttk.Combobox(srch, textvariable=self.search_provider, state="readonly",
+                     values=["brave", "tavily"], width=8).grid(row=0, column=3, padx=6)
+        ttk.Label(srch, text="Tavily key:").grid(row=1, column=0, sticky="w", padx=6, pady=3)
+        self.key_tavily = tk.StringVar(value=os.environ.get("TAVILY_API_KEY", ""))
+        ttk.Entry(srch, textvariable=self.key_tavily, width=40, show="•").grid(
+            row=1, column=1, sticky="w", padx=6, pady=3)
+        ttk.Label(srch, text="the selected provider is used as-is — no fallback",
+                  foreground="#666").grid(row=1, column=2, columnspan=2, sticky="w", padx=6)
 
         ttk.Label(frm, text="Default ⚡ provider:").grid(row=6, column=0, sticky="w", **pad)
         ttk.Combobox(frm, textvariable=self.provider, state="readonly",
@@ -1193,9 +1203,10 @@ class App:
             row=6, column=1, sticky="w", **pad)
         ttk.Button(frm, text="Save API keys", command=self.on_save_keys).grid(
             row=6, column=3, sticky="e", **pad)
-        ttk.Label(frm, text="DeepSeek has no built-in web search — quantitative research on "
-                            "DeepSeek runs on the app's own search+fetch tools and needs a "
-                            "Search API key (free tier: api-dashboard.search.brave.com).",
+        ttk.Label(frm, text="DeepSeek has no built-in web search — it runs on the app's own "
+                            "search+fetch tools and needs a search key for the SELECTED "
+                            "provider (Brave: api-dashboard.search.brave.com · Tavily: "
+                            "app.tavily.com). Saving never makes an API request.",
                   foreground="#666").grid(row=7, column=0, columnspan=4, sticky="w", **pad)
 
         ttk.Separator(frm, orient="horizontal").grid(row=8, column=0, columnspan=4, sticky="we", pady=8)
@@ -1464,7 +1475,8 @@ class App:
             "GROK_MODEL": self.model_grok.get().strip() or "grok-4.20-0309-reasoning",
             "DEEPSEEK_API_KEY": self.key_deepseek.get().strip(),
             "DEEPSEEK_MODEL": self.model_deepseek.get().strip() or "deepseek-chat",
-            "SEARCH_API_KEY": self.key_search.get().strip(),
+            "SEARCH_API_KEY": self.key_search.get().strip(),   # Brave / legacy shared
+            "TAVILY_API_KEY": self.key_tavily.get().strip(),   # Tavily-specific
             "SEARCH_PROVIDER": (self.search_provider.get() or "brave").strip().lower(),
             "AGENT_MODE": self.provider.get(),
         }

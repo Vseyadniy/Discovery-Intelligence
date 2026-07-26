@@ -1,0 +1,38 @@
+# Tavily smoke / cross-provider comparison fixture (Russian, SaaS ЭДО market).
+# Canonical case set — keep stable so Brave and any future provider can be run
+# against the SAME queries later:
+#   python -m src.search_harness config/search_fixture.tavily_smoke.yaml \
+#       --provider tavily --out harness_out/tavily_smoke
+#   … --provider brave  --out harness_out/brave_smoke      # later comparison
+#   … --dry-run                                             # plan only, no API
+#
+# Covers the three required source types: an official source, company
+# registration/finance, and recent news. Kept to 4 queries (≤ 4 Tavily credits
+# in basic mode). expected_domains: a hit = a result host equal to or a
+# subdomain of one of these.
+queries:
+  - id: official-korus-edo
+    category: official
+    query: "СберКорус официальный сайт продукты электронный документооборот"
+    expected_domains: [sberkorus.ru, esphere.ru, korusconsulting.ru]
+    preferred_domain: sberkorus.ru
+    notes: "Official source — the vendor's own site/product page."
+
+  - id: registry-diadoc-inn
+    category: registry
+    query: "Контур Диадок ИНН ОГРН юридическое лицо реквизиты"
+    expected_domains: [rusprofile.ru, list-org.com, egrul.nalog.ru, kontur.ru]
+    preferred_domain: rusprofile.ru
+    notes: "Company registration — registry card lookup."
+
+  - id: finance-sbis-revenue
+    category: financials
+    query: "Тензор СБИС выручка 2024 бухгалтерская отчётность"
+    expected_domains: [rusprofile.ru, audit-it.ru, sbis.ru, tensor.ru]
+    notes: "Finance — revenue/history from a registry/financial source."
+
+  - id: news-edo-2025
+    category: news
+    query: "электронный документооборот России новости 2025"
+    expected_domains: [cnews.ru, tadviser.ru, rbc.ru, comnews.ru]
+    notes: "Recent news — dated tier-2 press."

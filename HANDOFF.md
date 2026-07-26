@@ -74,7 +74,14 @@ Standing rule: commit + push every iteration; never commit `.env`,
   secrets, queries, or URLs logged. Search-only comparison harness
   `src/search_harness.py` (fixture-driven, brave|tavily|both, dry-run,
   `--max-queries`, offline `--analyze`, optional `--fetch-check`; never calls a
-  model or touches a run). Example fixture: `config/search_fixture.example.yaml`.
+  model or touches a run). Example fixture: `config/search_fixture.example.yaml`;
+  canonical cross-provider smoke set: `config/search_fixture.tavily_smoke.yaml`
+  (4 Russian queries — official / registry+finance / news).
+  **Desktop config (2026-07-27):** Settings now has separate masked **Brave**
+  and **Tavily** key fields plus the **Provider** selector. Brave stays in the
+  legacy shared `SEARCH_API_KEY` (preserved); Tavily saves to `TAVILY_API_KEY`;
+  `_provider_key` prefers the provider-specific var and falls back to the shared
+  one. Saving/switching makes no API request and adds no fallback.
   **Needs live validation:** no live Brave/Tavily call has been made — Tavily's
   real response shape/field names, its live status codes for rate-limit vs
   credit exhaustion (currently 429→rate-limit, 402→quota by assumption), and a
