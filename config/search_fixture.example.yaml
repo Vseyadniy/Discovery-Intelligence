@@ -1,0 +1,34 @@
+# Example search-harness fixture (Brave vs Tavily comparison).
+# Run:  python -m src.search_harness config/search_fixture.example.yaml \
+#         --provider both --out harness_out/example
+# Dry run (no API):  … --dry-run
+#
+# Each query: id (stable), category, query text, expected_domains (a hit is a
+# result whose host equals or is a subdomain of one of these), optional
+# preferred_domain, optional notes. Keep it small and stable.
+queries:
+  - id: reg-inn-sberkorus
+    category: registry
+    query: "СберКорус ИНН ОГРН юридическое лицо"
+    expected_domains: [rusprofile.ru, list-org.com, sbis.ru]
+    preferred_domain: rusprofile.ru
+    notes: "Registry card lookup — the anti-fabrication baseline."
+
+  - id: fin-revenue-directum
+    category: financials
+    query: "Directum выручка 2024 отчетность"
+    expected_domains: [rusprofile.ru, audit-it.ru, directum.ru]
+    notes: "Revenue history from a registry/financial source."
+
+  - id: prod-elma365-csp
+    category: product
+    query: "ELMA365 CSP возможности продукт"
+    expected_domains: [elma365.com, elma-bpm.ru]
+    preferred_domain: elma365.com
+    notes: "Product facts from the vendor's own pages."
+
+  - id: news-docsvision
+    category: news
+    query: "Docsvision новости 2025"
+    expected_domains: [docsvision.com, cnews.ru, tadviser.ru]
+    notes: "Dated tier-2 press for the news field."

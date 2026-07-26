@@ -760,7 +760,8 @@ _TELEMETRY_STAGES = {           # event name → stage label (+failed twin)
     "api_respondents": "respondents", "api_respondents_failed": "respondents",
 }
 _TELEMETRY_SUMS = ("seconds", "tool_calls", "searches", "fetches",
-                   "search_denied", "budget_rounds", "requests",
+                   "search_denied", "search_rate_limited", "search_errors",
+                   "budget_rounds", "requests",
                    "tokens_in", "tokens_out", "grounding_affected",
                    "early_stop", "extended")
 

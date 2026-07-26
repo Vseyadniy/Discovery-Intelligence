@@ -1179,7 +1179,13 @@ class App:
         self.key_search = tk.StringVar(value=os.environ.get("SEARCH_API_KEY", ""))
         ttk.Entry(frm, textvariable=self.key_search, width=42, show="•").grid(
             row=5, column=1, sticky="w", **pad)
-        ttk.Label(frm, text="(Brave)").grid(row=5, column=2, sticky="w", **pad)
+        sp = ttk.Frame(frm)
+        sp.grid(row=5, column=2, columnspan=2, sticky="w", **pad)
+        ttk.Label(sp, text="Provider:").grid(row=0, column=0)
+        self.search_provider = tk.StringVar(
+            value=(os.environ.get("SEARCH_PROVIDER") or "brave").lower())
+        ttk.Combobox(sp, textvariable=self.search_provider, state="readonly",
+                     values=["brave", "tavily"], width=8).grid(row=0, column=1, padx=4)
 
         ttk.Label(frm, text="Default ⚡ provider:").grid(row=6, column=0, sticky="w", **pad)
         ttk.Combobox(frm, textvariable=self.provider, state="readonly",
@@ -1459,6 +1465,7 @@ class App:
             "DEEPSEEK_API_KEY": self.key_deepseek.get().strip(),
             "DEEPSEEK_MODEL": self.model_deepseek.get().strip() or "deepseek-chat",
             "SEARCH_API_KEY": self.key_search.get().strip(),
+            "SEARCH_PROVIDER": (self.search_provider.get() or "brave").strip().lower(),
             "AGENT_MODE": self.provider.get(),
         }
         save_env({k: v for k, v in values.items() if v})

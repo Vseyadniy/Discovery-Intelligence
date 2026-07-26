@@ -335,8 +335,8 @@ def _run_deepseek_tools(system: str, user: str, max_tokens: int = 16000,
     import httpx
 
     from . import web_tools
-    from .web_tools import (SearchQuotaExhausted, SourceLog, fetch_url,
-                            require_search_key, web_search)
+    from .web_tools import (SearchQuotaExhausted, SearchRateLimited, SourceLog,
+                            fetch_url, require_search_key, web_search)
     require_search_key()   # fail fast — before any model tokens are spent
     ev = on_event or (lambda a, d: None)
     log = SourceLog()
@@ -494,9 +494,19 @@ def _run_deepseek_tools(system: str, user: str, max_tokens: int = 16000,
                             ev("quota", "")
                         payload = json.dumps({"error": _QUOTA_NOTE},
                                              ensure_ascii=False)
-                    except Exception as ex:
+                    except SearchRateLimited as ex:
+                        # transient, NOT sticky: the model just tries another
+                        # query/source; the pass keeps its budget bounded
+                        log.stats["search_rate_limited"] += 1
                         payload = json.dumps(
-                            {"error": f"{type(ex).__name__}: {ex}"},
+                            {"error": web_tools.redact(f"{type(ex).__name__}: {ex}"),
+                             "note": "search rate-limited — retry a different "
+                                     "query or use an already-opened source"},
+                            ensure_ascii=False)
+                    except Exception as ex:
+                        log.stats["search_errors"] += 1
+                        payload = json.dumps(
+                            {"error": web_tools.redact(f"{type(ex).__name__}: {ex}")},
                             ensure_ascii=False)
                 elif name == "fetch_url":
                     u = str(args.get("url", ""))

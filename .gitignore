@@ -12,6 +12,7 @@ __pycache__/
 
 # build artifacts & local-only safety copies (git history supersedes versions/)
 dist/
+harness_out/
 versions/
 Discovery Research.app/
 .venv/

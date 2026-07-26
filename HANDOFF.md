@@ -4,7 +4,7 @@
 
 `9106072` — "Rerun respondent sourcing over the same targets after «done»".
 Branch `main`, pushed to `origin` (github.com/Vseyadniy/Discovery-Intelligence).
-Test suite: **247 tests, all passing offline** (`python -m unittest discover -s tests`).
+Test suite: **283 tests, all passing offline** (`python -m unittest discover -s tests`).
 Standing rule: commit + push every iteration; never commit `.env`,
 `db/kb.sqlite`, `logs/`, `dist/`, built `.app`.
 
@@ -61,8 +61,26 @@ Standing rule: commit + push every iteration; never commit `.env`,
 - **OpenAI (gpt) path** verified by construction only (owner billing inactive).
 - **Contact/URL grounding is DeepSeek-only** by design (Prompt/server-search
   providers expose no per-pass browsing log).
-- **Brave free quota** ≈ one medium run; upgrade or add a `SEARCH_PROVIDER`
-  (Tavily slot exists) for heavier use.
+- **Search providers (2026-07-26):** Brave (default) + **Tavily** are both
+  operator-selectable via `SEARCH_PROVIDER` (no fallback, no key-based
+  switching — a run stays on the chosen provider). Both normalise to the same
+  `{title,url,snippet}` contract so DeepSeek tools / SourceLog / grounding /
+  `fetch_url` are provider-independent. Tavily runs controlled/reproducible
+  (basic depth, auto-params off, no answer, no raw content, existing limit),
+  key in the Authorization header only. New search error taxonomy distinguishes
+  transient rate limit (429, bounded retry, NOT sticky) / quota (402, sticky) /
+  auth / config / timeout / network / malformed / empty; compact per-pass
+  counts (`search_rate_limited`, `search_errors`) added to telemetry — no
+  secrets, queries, or URLs logged. Search-only comparison harness
+  `src/search_harness.py` (fixture-driven, brave|tavily|both, dry-run,
+  `--max-queries`, offline `--analyze`, optional `--fetch-check`; never calls a
+  model or touches a run). Example fixture: `config/search_fixture.example.yaml`.
+  **Needs live validation:** no live Brave/Tavily call has been made — Tavily's
+  real response shape/field names, its live status codes for rate-limit vs
+  credit exhaustion (currently 429→rate-limit, 402→quota by assumption), and a
+  real Brave-vs-Tavily quality/latency comparison via the harness are all
+  unverified. Brave 402→sticky is unchanged and still covered offline; Brave
+  429 is now transient (behaviour change — verify against the live free tier).
 - **Legacy `db/kb.sqlite` + `outputs/`** are unused by current workflows; a
   cleanup pass could remove them and the old MVP docs under `docs/`.
 - Low-severity respondent items from the audits (staleness window on

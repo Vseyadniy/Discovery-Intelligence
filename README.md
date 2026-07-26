@@ -62,9 +62,49 @@ Four API providers (set keys in Settings → saved to `.env`):
 
 DeepSeek has no server-side browsing, so the app gives it its own
 `web_search` + `fetch_url` tools (client-side function calling). That requires a
-**Brave Search API key** (`SEARCH_API_KEY`; free tier at
-api-dashboard.search.brave.com). One medium-depth run can exhaust the Brave free
+**search API key** (`SEARCH_API_KEY`). One medium-depth run can exhaust a free
 monthly quota — the app degrades gracefully (see Limitations).
+
+**Search provider (`SEARCH_PROVIDER`).** Two backends are explicitly
+selectable — `brave` (default; free tier at api-dashboard.search.brave.com) and
+`tavily` (Tavily Search; app.tavily.com). Selection is **operator-controlled
+and never automatic**: a run stays on the chosen provider — there is no
+fallback and no key-based switching. Set it in Settings (dropdown next to the
+search key) or in `.env`. Both backends normalise to the same internal
+`{title, url, snippet}` contract, so DeepSeek's tools, SourceLog, grounding and
+`fetch_url` are provider-independent. Tavily runs in a controlled, reproducible
+mode (basic depth, no auto-parameters, no generated answer, no raw page
+content, the existing result limit). Keys resolve per provider —
+`BRAVE_API_KEY` / `TAVILY_API_KEY` override `SEARCH_API_KEY` when set (only
+needed to exercise both at once in the harness); production needs just
+`SEARCH_API_KEY` + `SEARCH_PROVIDER`.
+
+Search failures are now distinguished rather than all treated as quota
+exhaustion: **transient rate limits** (HTTP 429) get a small bounded
+retry/backoff and are never sticky; only **explicit quota/credit exhaustion**
+(HTTP 402) sets the sticky flag that stops new searches; **auth/config**,
+**timeout/network**, **malformed**, and **successful-empty** are each their own
+category (visible as compact per-pass counts in run telemetry — no queries,
+URLs, or keys are ever logged).
+
+**Search comparison harness** (search only — no model, no research run):
+
+```bash
+python -m src.search_harness config/search_fixture.example.yaml \
+    --provider both --out harness_out/run1        # brave | tavily | both
+python -m src.search_harness FIXTURE --dry-run    # validate + plan, no API
+python -m src.search_harness --analyze harness_out/run1   # offline re-metric
+```
+
+It runs a fixed JSON/YAML fixture (stable id, category, query, expected
+domains, optional preferred domain, notes) through the production adapters and
+writes `results.json` (raw per-query-per-provider results + telemetry),
+`metrics.json`, and `report.md`: success/empty rates, error categories, latency
+p50/p95, expected-domain hit@1/3/5, unique domains, duplicate URLs/domains, and
+paired Brave-vs-Tavily by query id. It never falls back between providers,
+supports `--max-queries` and `--dry-run`, and `--fetch-check` (off by default)
+tests top-result fetchability via the existing `fetch_url`, kept separate from
+retrieval quality.
 
 ---
 
@@ -178,7 +218,9 @@ email, linkedin, profile_url, sources, confidence, verified_on.
 
 - **Keys/models:** `CHEAP_API_KEY`/`CHEAP_MODEL` (OpenAI), `ANTHROPIC_API_KEY`/
   `CLAUDE_MODEL`, `GROK_API_KEY`/`GROK_MODEL`, `DEEPSEEK_API_KEY`/`DEEPSEEK_MODEL`,
-  `SEARCH_API_KEY`/`SEARCH_PROVIDER` (Brave), `AGENT_MODE` (default provider).
+  `SEARCH_API_KEY` + `SEARCH_PROVIDER` (`brave` default | `tavily`; optional
+  per-provider `BRAVE_API_KEY`/`TAVILY_API_KEY` overrides), `AGENT_MODE`
+  (default provider).
 - **Cost line:** `TOKEN_PRICE_IN`/`TOKEN_PRICE_OUT` (USD per 1M tokens) — only
   then does the run summary show an estimated cost.
 - **DeepSeek tuning:** `DS_BUDGET_DISCOVERY|COLLECTOR_A|COLLECTOR_B|REPAIR`
@@ -245,7 +287,7 @@ Excel. While Auto runs, the manual ⚡/Build buttons are parked. Runs created
 for Auto keep the legacy `model` field as the Prompt-mode paste target; the
 Auto execution provider is recorded separately (`auto_provider` in run.json).
 
-Tests: `python -m unittest discover -s tests` (233 tests, offline).
+Tests: `python -m unittest discover -s tests` (283 tests, offline).
 
 ---
 
@@ -254,9 +296,13 @@ Tests: `python -m unittest discover -s tests` (233 tests, offline).
 - **Live coverage is partial.** Quantitative + respondent flows are validated
   live on DeepSeek; the qualitative one-pager loop is exercised in tests and one
   live company, not a full multi-company live run. See `HANDOFF.md`.
-- **Brave free quota** (~2,000 req/month) ≈ one medium-depth DeepSeek run. On
-  HTTP 402 the app stops searching, keeps using already-opened pages, leaves
-  unresolved fields blank (yellow), and says so — it does not silently degrade.
+- **Search free quota** (Brave ~2,000 req/month) ≈ one medium-depth DeepSeek
+  run. On HTTP 402 the app stops searching, keeps using already-opened pages,
+  leaves unresolved fields blank (yellow), and says so — it does not silently
+  degrade. HTTP 429 is now treated as a transient rate limit (bounded retry),
+  not permanent exhaustion. Tavily is selectable via `SEARCH_PROVIDER=tavily`;
+  its live behaviour (quota vs rate-limit signalling, latency, coverage) is not
+  yet field-validated — use the harness to compare before switching a real run.
 - **Contact grounding is DeepSeek-only.** In Prompt mode the app cannot verify
   what the web chat browsed, so contact text-grounding applies to the app-tools
   (DeepSeek) path.
