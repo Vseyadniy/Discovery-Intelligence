@@ -507,13 +507,20 @@ def autofix_records(run_dir: Path) -> dict:
     seg_by_norm: dict[str, str] = {}
     for s in segments or []:
         seg_by_norm.setdefault(_norm_label(s), s)
+    schema_names = [f["name"] for f in load_schema().get("fields", [])] or None
     fixed: dict[str, list[str]] = {}
     for e in g["rejected"]:
         rec = e["record"]
-        fields = rec.get("fields") or {}
         codes = {(i["field"], i["code"]) for i in e["issues"]
                  if i["severity"] == "reject"}
         notes: list[str] = []
+
+        # schema fields stranded at the record's TOP level (a bad repair pass)
+        # → moved into `fields` so the gate can see their values again
+        moved = gate.lift_misplaced_fields(rec, schema_names)
+        if moved:
+            notes.append("lifted into fields: " + ", ".join(moved))
+        fields = rec.get("fields") or {}
 
         def val(name):
             f = fields.get(name)

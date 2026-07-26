@@ -29,6 +29,7 @@ Checks:
 """
 from __future__ import annotations
 
+import copy
 import json
 import re
 from difflib import SequenceMatcher
@@ -564,6 +565,84 @@ def record_quality(rec: dict, schema_fields: list[str] | None = None) -> dict:
             "mandatory_gaps": mandatory_gaps, "fields_total": len(names),
             "fields_filled": filled,
             "product_basis": product_revenue_basis(fields)}
+
+
+# ── repair safety (deterministic; no model, no web) ──────────────────────────
+# Observed live (СберКорус, 2026-07-22 run): a repair response returned six
+# schema fields at the record's TOP level instead of inside `fields` and
+# dropped unrelated fields; saving it verbatim produced fresh merge-loss +
+# required-empty rejects and a value the gate could never see again.
+_RECORD_META_KEYS = {"fields", "entity", "entity_match", "review_flags",
+                     "sources", "collector"}
+
+
+def lift_misplaced_fields(rec: dict, schema_fields: list[str] | None = None) -> list[str]:
+    """Move schema fields a model left at the record's top level into
+    `fields` (scalars are wrapped as {value, source:""}). Only fills slots
+    that are empty/absent — an existing non-empty field is never overwritten —
+    and never touches record meta keys. Returns the moved names."""
+    if not isinstance(rec, dict):
+        return []
+    fields = rec.get("fields")
+    if not isinstance(fields, dict):
+        fields = {}
+        rec["fields"] = fields
+    known = set(schema_fields or []) or set(fields)
+    moved = []
+    for k in list(rec.keys()):
+        if k in _RECORD_META_KEYS or k not in known:
+            continue
+        if value_of(fields.get(k)) not in (None, ""):
+            continue
+        v = rec.pop(k)
+        fields[k] = v if isinstance(v, dict) else {"value": v, "source": ""}
+        moved.append(k)
+    return moved
+
+
+def repair_scope(issues: list[dict]) -> set[str]:
+    """Field names a repair pass may OVERWRITE — the failed checks' fields.
+    Gate issue labels sometimes join several names with commas (merge-loss)
+    or use aggregate labels (history ranges); splitting covers the former,
+    and labels matching no real field simply never match."""
+    out = set()
+    for i in issues or []:
+        for part in str(i.get("field", "")).split(","):
+            part = part.strip()
+            if part:
+                out.add(part)
+    return out
+
+
+def merge_repair(old: dict, new: dict, scope: set[str]) -> dict:
+    """Non-destructive repair merge: start from the SAVED record and take from
+    the repair response only (a) fields inside the declared repair scope and
+    (b) fields that were empty before and have content now (gap-filling can
+    never lose data). Fields the response dropped or restructured stay as
+    they were — a bad repair can damage only what it was asked to fix.
+    review_flags are unioned (old `unresolved:` markers drive quality states
+    and must survive); the top-level structure stays the old record's."""
+    merged = copy.deepcopy(old) if isinstance(old, dict) else {}
+    mf = merged.get("fields")
+    if not isinstance(mf, dict):
+        mf = {}
+        merged["fields"] = mf
+    nf = (new.get("fields") or {}) if isinstance(new, dict) else {}
+    if isinstance(nf, dict):
+        for name, f in nf.items():
+            if name in scope:
+                mf[name] = f
+            elif (value_of(mf.get(name)) in (None, "")
+                    and value_of(f) not in (None, "")):
+                mf[name] = f
+    old_flags = [str(x) for x in ((old or {}).get("review_flags") or [])] \
+        if isinstance(old, dict) else []
+    new_flags = [str(x) for x in ((new or {}).get("review_flags") or [])] \
+        if isinstance(new, dict) else []
+    flags = old_flags + [x for x in new_flags if x not in old_flags]
+    if flags:
+        merged["review_flags"] = flags
+    return merged
 
 
 # ── whole-run gate ────────────────────────────────────────────────────────────

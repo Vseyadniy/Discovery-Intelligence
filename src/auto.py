@@ -659,10 +659,16 @@ def auto_run(run_dir: Path, provider: str = "deepseek",
             if after["rejected"]:
                 stuck = stuck_rejects(run_dir, after)
                 if len(stuck) == after["rejected"]:
+                    # distinguish the full picture in one reason: what needs a
+                    # human, and what a fresh search quota would still unlock
+                    extra = ""
+                    if web_tools.QUOTA_EXHAUSTED and after["pending"]:
+                        extra = (f"; {after['pending']} company(ies) remain "
+                                 f"unresearched (search quota exhausted)")
                     return terminal(
                         "needs-review",
                         f"all {after['rejected']} remaining reject(s) exhausted "
-                        f"their repair/B-rerun caps: {'; '.join(stuck)}")
+                        f"their repair/B-rerun caps: {'; '.join(stuck)}{extra}")
             if no_progress >= lim.no_progress_steps:
                 return terminal(
                     "stopped-no-progress",

@@ -4,7 +4,7 @@
 
 `9106072` — "Rerun respondent sourcing over the same targets after «done»".
 Branch `main`, pushed to `origin` (github.com/Vseyadniy/Discovery-Intelligence).
-Test suite: **233 tests, all passing offline** (`python -m unittest discover -s tests`).
+Test suite: **247 tests, all passing offline** (`python -m unittest discover -s tests`).
 Standing rule: commit + push every iteration; never commit `.env`,
 `db/kb.sqlite`, `logs/`, `dist/`, built `.app`.
 
@@ -106,6 +106,39 @@ Standing rule: commit + push every iteration; never commit `.env`,
    valid Prompt-mode paste target, the executor is recorded as
    `auto_provider: deepseek`. Manual ⚡/Build are parked while Auto owns the
    run.
+   **Repair-safety fixes (2026-07-22 controlled run, СберКорус):** two
+   defects confirmed from `logs/2026-07-22_2344_saas-работа-с-документами_
+   superficial` and fixed.
+   (a) *Repair damaged the record.* A repair response returned six schema
+   fields at the record's TOP level with empty `fields` slots and dropped
+   unrelated data; saved verbatim it produced fresh `merge-loss` +
+   `required-empty` rejects (events at 21:24:51). Fix: repair now
+   `lift_misplaced_fields` (top-level schema fields → `fields`, empty slots
+   only, meta keys untouched) then `merge_repair` INTO the saved record —
+   only the declared repair scope may overwrite, out-of-scope fields the
+   model dropped/blanked are preserved, gap-fills still allowed, review_flags
+   unioned. A malformed/parse-failing response now leaves the previous record
+   byte-identical. `autofix_records` also lifts records already damaged on
+   disk (no model call), so the existing run above is resumable. `only_fields`
+   grounding, salvage, repair caps, and `unresolved:` blanking are unchanged.
+   (b) *Capped reject blocked the queue.* СберКорус hit its repair cap yet
+   kept being selected as the first rejected record, starving repairable ones
+   until Auto quit as `stopped-no-progress` (21:29:41). Fix: `run_next_step`
+   repair is now two passes — pass 1 settles cap-exhausted / B-rerun-exhausted
+   records (blank+flag or MANUAL REVIEW) WITHOUT consuming a batch slot; pass
+   2 spends the batch only on records that can still improve. Auto therefore
+   works the eligible rejects before choosing a terminal state, and
+   `needs-review` now names the quota context (unresearched companies) so it
+   is distinct from genuine no-progress. Quota still blocks new company
+   research (`no_new_research` path intact).
+   Changed files: `src/gate.py` (lift/scope/merge helpers), `src/runs.py`
+   (autofix lift), `src/api_runner.py` (two-pass queue + scoped merge),
+   `src/auto.py` (terminal reason), `tests/test_repair_safety.py` (14 tests).
+   **Still needs live validation:** an end-to-end app run reaching
+   `complete`/`complete-with-gaps` on real DeepSeek output (offline tests use
+   synthetic repair responses); confirm a real misplaced-field repair now
+   converges instead of looping, and that a capped+repairable mix ends
+   `needs-review`.
    **Next Auto milestones:** controlled live test through the app, qual +
    respondent orchestration, per-run spend cap in ₽/$.
 3. **Repo hygiene**: remove the legacy KB/outputs paths and stale `docs/` MVP

@@ -481,16 +481,31 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
                 **({"codes": dict(code_hist)} if code_hist else {}))
     if g["rejected"]:
         fixed, manual, failed = [], [], []
-        for e in g["rejected"][:batch]:
+        eligible = []
+        # pass 1 — settle CAP-EXHAUSTED records first, WITHOUT consuming batch
+        # slots: a stuck record at the head of the queue must never starve the
+        # repairable ones behind it (observed live: a capped СберКорус kept
+        # occupying the single batch-1 slot until Auto gave up as no-progress)
+        for e in g["rejected"]:
             issues = [i for i in e["issues"] if i["severity"] == "reject"]
-            a = gate._load(ar / f"{e['stem']}_A.json") or {}
-            b = gate._load(ar / f"{e['stem']}_B.json") or {}
-
-            # livelock guard: stop when attempts run out OR the last two
-            # repairs left the exact same failures — then blank the evidence
-            # fields we cannot source and flag them `unresolved:` instead of
-            # burning more tool calls on the same wall
             sig = ",".join(sorted(f"{i['field']}:{i['code']}" for i in issues))
+            b_fail = {i["code"] for i in issues} & _B_CODES
+            if b_fail:
+                # Collector-B failures → fresh B pass + verifier re-merge (a
+                # record repair cannot clear them: the gate re-reads _B.json)
+                if _b_reruns(run_dir, e["entity"], b_fail) >= _B_RERUN_LIMIT:
+                    msg = (f"{e['entity']}: {'/'.join(sorted(b_fail))} survived "
+                           f"{_B_RERUN_LIMIT} fresh Collector B reruns — manual "
+                           f"review needed (inspect {e['stem']}_A/_B.json; no "
+                           f"more API calls will be spent on this check)")
+                    log(f"[api] STOP · {msg}")
+                    manual.append(msg)
+                else:
+                    eligible.append((e, issues, sig, b_fail))
+                continue
+            # livelock guard: attempts ran out OR the last two repairs left the
+            # exact same failures — blank the evidence fields we cannot source
+            # and flag them `unresolved:` instead of burning more tool calls
             sigs = _repair_sigs(run_dir, e["entity"])
             if len(sigs) >= _REPAIR_LIMIT or sigs[-2:] == [sig, sig]:
                 blanked = _blank_unresolved(
@@ -509,20 +524,14 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
                     log(f"[api] STOP · {msg}")
                     manual.append(msg)
                 continue
+            eligible.append((e, issues, sig, None))
 
-            # Collector-B failures → fresh B pass + verifier re-merge (a record
-            # repair cannot clear them: the gate re-reads the _B.json file)
-            b_fail = {i["code"] for i in issues} & _B_CODES
+        # pass 2 — spend the batch only on records that can still improve
+        for e, issues, sig, b_fail in eligible[:batch]:
+            a = gate._load(ar / f"{e['stem']}_A.json") or {}
+            b = gate._load(ar / f"{e['stem']}_B.json") or {}
             if b_fail:
                 brand = e["entity"]
-                if _b_reruns(run_dir, brand, b_fail) >= _B_RERUN_LIMIT:
-                    msg = (f"{brand}: {'/'.join(sorted(b_fail))} survived "
-                           f"{_B_RERUN_LIMIT} fresh Collector B reruns — manual "
-                           f"review needed (inspect {e['stem']}_A/_B.json; no "
-                           f"more API calls will be spent on this check)")
-                    log(f"[api] STOP · {msg}")
-                    manual.append(msg)
-                    continue
                 log(f"[api] {brand}: {'/'.join(sorted(b_fail))} — rerunning "
                     f"Collector B from scratch, then re-merging…")
                 b_raw, engine = mr.collect(
@@ -580,11 +589,27 @@ def run_next_step(run_dir: Path, batch: int = 3, provider: str | None = None,
                 raw, engine = mr.collect(
                     _SYS, prompt, on_event=_ev(log, f"🔧 Repair · {e['entity']}"),
                     budget=mr.stage_budget("repair"), allow_extend=important)
-                rec = mr.extract_json(raw)
-                # repair audits ONLY the fields the model was asked to fix — the
+                rec_new = mr.extract_json(raw)
+                # a repair may only touch its declared scope: misplaced
+                # top-level schema fields are lifted deterministically, then
+                # the response is merged INTO the saved record — fields the
+                # model dropped or restructured stay exactly as they were
+                # (observed live: a repair returned six schema fields at the
+                # top level and wiped unrelated data → fresh merge-loss +
+                # required-empty rejects)
+                lifted = gate.lift_misplaced_fields(rec_new, schema_fields)
+                if lifted:
+                    log(f"[api] repair {e['entity']}: lifted misplaced "
+                        f"field(s) into `fields`: {', '.join(lifted)}")
+                rec = gate.merge_repair(e["record"], rec_new,
+                                        gate.repair_scope(issues))
+                # repair audits ONLY what this pass actually changed — the
                 # rest keep sources grounded in their original research pass
+                old_fields = e["record"].get("fields") or {}
+                taken = {n for n, f in (rec.get("fields") or {}).items()
+                         if old_fields.get(n) != f}
                 grd = _ground(rec, log, f"Repair · {e['entity']}",
-                              only_fields={i["field"] for i in issues})
+                              only_fields={i["field"] for i in issues} | taken)
                 rec["entity"] = e["entity"]
                 _save(e["path"], rec)
                 # effectiveness telemetry: what this pass actually changed, and
