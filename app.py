@@ -95,6 +95,44 @@ class App:
         self._build_run_tab(tab1)
         self._build_qual_tab(tab2)
         self._build_settings_tab(tab3)
+        self._enable_edit_shortcuts()
+
+    def _enable_edit_shortcuts(self):
+        """macOS Tk does not bind Cmd+V/C/X/A inside entry widgets by default,
+        so pasting an API key into Settings silently does nothing. Bind the
+        clipboard virtual events for both Command (macOS) and Control (other
+        platforms) on the entry/text widget CLASSES, so every field — current
+        and future — supports paste / copy / cut / select-all."""
+        def paste(e):
+            e.widget.event_generate("<<Paste>>")
+            return "break"
+
+        def copy(e):
+            e.widget.event_generate("<<Copy>>")
+            return "break"
+
+        def cut(e):
+            e.widget.event_generate("<<Cut>>")
+            return "break"
+
+        def select_all(e):
+            w = e.widget
+            try:
+                w.select_range(0, "end")     # Entry / ttk.Entry
+                w.icursor("end")
+            except Exception:
+                try:
+                    w.tag_add("sel", "1.0", "end")   # Text
+                except Exception:
+                    pass
+            return "break"
+
+        for cls in ("TEntry", "Entry", "Text"):
+            for mod in ("Command", "Control"):
+                self.root.bind_class(cls, f"<{mod}-v>", paste)
+                self.root.bind_class(cls, f"<{mod}-c>", copy)
+                self.root.bind_class(cls, f"<{mod}-x>", cut)
+                self.root.bind_class(cls, f"<{mod}-a>", select_all)
 
     # ── shared: past-run picker ───────────────────────────────────────────────
     def _pick_run(self, on_picked):
