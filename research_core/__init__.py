@@ -25,9 +25,9 @@ from .control import (
     STOPPED_BUDGET, STOPPED_NO_PROGRESS, STOPPED_USER, INTERRUPTED, BLOCKED_INPUT,
 )
 from .gateways import (
-    SearchResult, FetchedPage, ModelResult,
-    ModelGateway, RetrievalGateway, Grounding,
-    NullModelGateway, NullRetrievalGateway, InMemorySourceLog,
+    SearchResult, FetchedPage, ModelResult, ResearchPassResult,
+    ResearchPass, ModelGateway, RetrievalGateway, Grounding,
+    NullModelGateway, NullRetrievalGateway, InMemorySourceLog, ScriptedResearchPass,
 )
 from .spec import OutputSpec, ResearchSpec, ResearchPack, PackRegistry, REGISTRY
 
@@ -41,8 +41,9 @@ __all__ = [
     "COMPLETE", "COMPLETE_WITH_GAPS", "NEEDS_REVIEW", "STOPPED_QUOTA",
     "STOPPED_PROVIDER", "STOPPED_BUDGET", "STOPPED_NO_PROGRESS", "STOPPED_USER",
     "INTERRUPTED", "BLOCKED_INPUT",
-    "SearchResult", "FetchedPage", "ModelResult",
-    "ModelGateway", "RetrievalGateway", "Grounding",
+    "SearchResult", "FetchedPage", "ModelResult", "ResearchPassResult",
+    "ResearchPass", "ModelGateway", "RetrievalGateway", "Grounding",
     "NullModelGateway", "NullRetrievalGateway", "InMemorySourceLog",
+    "ScriptedResearchPass",
     "OutputSpec", "ResearchSpec", "ResearchPack", "PackRegistry", "REGISTRY",
 ]

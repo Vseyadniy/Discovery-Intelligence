@@ -22,6 +22,7 @@ from research_core import (
     NullModelGateway, NullRetrievalGateway, InMemorySourceLog,
     ModelGateway, RetrievalGateway, Grounding,
     OutputSpec, ResearchSpec, PackRegistry,
+    ResearchPass, ResearchPassResult, ScriptedResearchPass,
 )
 from research_core.control import STOPPED_NO_PROGRESS, TERMINAL_STATES, SUCCESS_STATES
 
@@ -354,6 +355,95 @@ class TestCoreIsolation(unittest.TestCase):
                            capture_output=True, text=True, timeout=60)
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertTrue(r.stdout.startswith("CLEAN"), r.stdout + r.stderr)
+
+
+# ── foundation fixes added for the Funds vertical slice ──────────────────────
+class TestPackVersionPersisted(unittest.TestCase):
+    """A run must identify the EXACT pack version that owns it (reproducibility
+    across pack evolution)."""
+
+    def test_version_in_meta_and_created_event(self):
+        with tempfile.TemporaryDirectory() as d:
+            store = RunStore(Path(d))
+            h = store.create(pack_id="funds", label="RU VC", pack_version="1.3.0")
+            self.assertEqual(h.load_meta()["pack_version"], "1.3.0")
+            created = h.ledger.last("created")
+            self.assertEqual(created["pack_version"], "1.3.0")
+
+    def test_version_defaults_and_stringified(self):
+        with tempfile.TemporaryDirectory() as d:
+            store = RunStore(Path(d))
+            self.assertEqual(store.create(pack_id="p", label="m").load_meta()["pack_version"], "0")
+            h = store.create(pack_id="p", label="m2", pack_version=2)
+            self.assertEqual(h.load_meta()["pack_version"], "2")   # coerced to str
+
+
+class TestLedgerCrossHandleConcurrency(unittest.TestCase):
+    """Two handles to the SAME run must serialise their appends. A per-instance
+    lock would not — this guards the controller+UI case."""
+
+    def test_two_ledgers_same_file_share_a_lock(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "events.jsonl"
+            a, b = EventLedger(p), EventLedger(p)
+            self.assertIs(a._lock, b._lock)   # same file → same lock object
+
+            def w(lg, tag):
+                for j in range(50):
+                    lg.append("tick", who=tag, j=j)
+
+            t1 = threading.Thread(target=w, args=(a, "A"))
+            t2 = threading.Thread(target=w, args=(b, "B"))
+            t1.start(); t2.start(); t1.join(); t2.join()
+            # every line intact & parseable (no interleaved/torn writes), 100 total
+            lines = p.read_text(encoding="utf-8").splitlines()
+            self.assertEqual(len(lines), 100)
+            for ln in lines:
+                json.loads(ln)   # would raise on a torn line
+            self.assertEqual(a.count("tick"), 100)
+
+    def test_different_files_get_different_locks(self):
+        with tempfile.TemporaryDirectory() as d:
+            self.assertIsNot(EventLedger(Path(d) / "a.jsonl")._lock,
+                             EventLedger(Path(d) / "b.jsonl")._lock)
+
+    def test_lock_keyed_by_resolved_path(self):
+        with tempfile.TemporaryDirectory() as d:
+            base = Path(d)
+            a = EventLedger(base / "events.jsonl")
+            b = EventLedger(base / "sub" / ".." / "events.jsonl")   # same file, messy path
+            self.assertIs(a._lock, b._lock)
+
+
+class TestResearchPass(unittest.TestCase):
+    """The higher-level browse+extract+ground seam (added because collect() owns
+    provider tool orchestration and does not fit complete()+search())."""
+
+    def test_scripted_pass_returns_text_and_grounding(self):
+        rp = ScriptedResearchPass([
+            ('{"name": "Alpha Capital"}',
+             {"https://reg.example/alpha": "Alpha Capital AUM $1.2bn manager"}),
+        ])
+        self.assertIsInstance(rp, ResearchPass)
+        res = rp.run_pass("sys", "research Alpha")
+        self.assertIsInstance(res, ResearchPassResult)
+        self.assertEqual(json.loads(res.text)["name"], "Alpha Capital")
+        # grounding is populated from the scripted page → pack can verify claims
+        self.assertTrue(res.grounding.has_source("https://reg.example/alpha"))
+        self.assertTrue(res.grounding.supports_value("$1.2bn"))
+        self.assertFalse(res.grounding.supports_value("$9bn"))   # fabricated → unsupported
+
+    def test_script_exhaustion_is_empty_ungrounded(self):
+        rp = ScriptedResearchPass([])
+        res = rp.run_pass("s", "u")
+        self.assertEqual(res.text, "{}")
+        self.assertFalse(res.grounding.has_source("anything"))
+
+    def test_steps_advance(self):
+        rp = ScriptedResearchPass([("{\"i\": 1}", {}), ("{\"i\": 2}", {})])
+        self.assertEqual(json.loads(rp.run_pass("s", "u").text)["i"], 1)
+        self.assertEqual(json.loads(rp.run_pass("s", "u").text)["i"], 2)
+        self.assertEqual(rp.calls, 2)
 
 
 if __name__ == "__main__":

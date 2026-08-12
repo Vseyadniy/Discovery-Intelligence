@@ -5,12 +5,26 @@ The PRODUCTION adapters already exist in the company code and are NOT imported
 here (that would pull provider SDKs, `.env` loading, and paid-request surface
 into the core and break offline isolation):
 
-    ModelGateway      → wrap src.model_router  (collect / verify)
-    RetrievalGateway  → wrap src.web_tools     (web_search / fetch_url)
+    ResearchPass      → wrap src.model_router.collect  (browse+extract+ground pass)
+    ModelGateway      → wrap src.model_router.verify   (no-browse model call)
+    RetrievalGateway  → wrap src.web_tools             (pack-driven search/fetch)
     Grounding         → wrap src.web_tools.SourceLog
 
 A future pack constructs the production adapter and passes it in; the core and
-its tests use the Null/InMemory adapters below and make no network calls.
+its tests use the Null/Scripted adapters below and make no network calls.
+
+Why THREE model-facing contracts, not one:
+  * `collect()` in the company code is a *single high-level research pass* — for
+    server-side providers (gpt/claude/grok) the model browses itself; for
+    DeepSeek the app runs a full search→fetch→budget→SourceLog tool loop. It
+    returns model text AND the grounding log. That whole orchestration lives
+    inside the provider, so the reusable seam is `ResearchPass.run_pass(...)`,
+    NOT `ModelGateway.complete()` + `RetrievalGateway.search()` (which would make
+    a pack re-own the tool loop — see RESEARCH_CORE_HANDOFF §gateway boundary).
+  * `ModelGateway.complete()` remains the seam for a *no-browse* model call (the
+    company `verify` path).
+  * `RetrievalGateway` remains the seam for a pack that drives its OWN searches
+    (e.g. building a landscape deterministically from a registry).
 """
 from __future__ import annotations
 
@@ -40,7 +54,28 @@ class ModelResult:
     raw: object = None
 
 
+@dataclass(frozen=True)
+class ResearchPassResult:
+    """The output of one research pass: the model's raw text (to be JSON-parsed
+    by the pack), the `Grounding` produced during the pass (so the pack can
+    reject unsupported claims), the engine label, and token usage. Mirrors the
+    company `collect()` return `(text, grounding_log, engine)`."""
+    text: str
+    grounding: "Grounding | None" = None
+    engine: str = ""
+    tokens: int = 0
+
+
 # ── contracts ─────────────────────────────────────────────────────────────────
+@runtime_checkable
+class ResearchPass(Protocol):
+    """A single provider-owned browse→extract→ground pass. The provider decides
+    whether/how to browse; the pack supplies the task (system+user) and consumes
+    text + grounding. `budget` shapes an app-side tool budget where applicable
+    (DeepSeek); server-side providers ignore it."""
+    def run_pass(self, system: str, user: str, *, budget: "int | None" = None) -> ResearchPassResult: ...
+
+
 @runtime_checkable
 class ModelGateway(Protocol):
     def complete(self, system: str, user: str, *, max_tokens: int = 4000) -> ModelResult: ...
@@ -83,6 +118,32 @@ class NullRetrievalGateway:
 
     def fetch(self, url: str) -> FetchedPage:
         return FetchedPage(url=url, text="", ok=False)
+
+
+class ScriptedResearchPass:
+    """Deterministic offline `ResearchPass`. Each call pops the next scripted
+    step: a `(reply_text, pages)` pair, where `pages` is `{url: text}` the pass
+    'fetched'. It returns the reply plus an `InMemorySourceLog` populated from
+    those pages, so a pack's grounding checks run against real (fixture) source
+    text with no network. Exhausting the script yields an empty, ungrounded
+    pass (models don't run out of turns; tests shouldn't over-call silently)."""
+
+    def __init__(self, steps: "list[tuple[str, dict]]", engine: str = "scripted"):
+        self._steps = list(steps)
+        self._i = 0
+        self.engine = engine
+        self.calls = 0
+
+    def run_pass(self, system: str, user: str, *, budget=None) -> ResearchPassResult:
+        self.calls += 1
+        log = InMemorySourceLog()
+        if self._i >= len(self._steps):
+            return ResearchPassResult(text="{}", grounding=log, engine=self.engine)
+        reply, pages = self._steps[self._i]
+        self._i += 1
+        for url, text in (pages or {}).items():
+            log.fetched(url, text)
+        return ResearchPassResult(text=reply, grounding=log, engine=self.engine)
 
 
 @dataclass

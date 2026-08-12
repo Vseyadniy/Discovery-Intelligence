@@ -108,8 +108,11 @@ class TestQuotaFallback(unittest.TestCase):
 
     def test_brave_402_sets_sticky_flag(self):
         resp = unittest.mock.MagicMock(status_code=402)
+        # Pin the provider so this Brave-specific test stays offline regardless of
+        # the local .env SEARCH_PROVIDER (tavily routes to requests.post, which
+        # this mock does not intercept → a live call). research-core hygiene fix.
         with patch("src.web_tools.requests.get", return_value=resp), \
-             patch.dict("os.environ", {"SEARCH_API_KEY": "k"}):
+             patch.dict("os.environ", {"SEARCH_API_KEY": "k", "SEARCH_PROVIDER": "brave"}):
             with self.assertRaises(web_tools.SearchQuotaExhausted):
                 web_tools.web_search("q")
         self.assertTrue(web_tools.QUOTA_EXHAUSTED)

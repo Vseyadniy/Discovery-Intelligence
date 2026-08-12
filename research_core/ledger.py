@@ -6,6 +6,14 @@ The single source of truth for a run's history, mirroring the company
 concurrent workers are safe. Reusable verbatim by any research pack; the
 company code (`src.runs._event`) writes the same shape, so tooling can read
 both.
+
+Concurrency note: the append lock is keyed by the ledger's *resolved path* and
+shared process-wide, so two `EventLedger` instances pointing at the same file —
+e.g. a controller and a UI each holding their own `RunHandle` to one run — still
+serialise their writes. (A per-instance lock would not: two handles = two locks
+= no mutual exclusion. The company `runs._event` avoids this with a single
+module-level lock; keying by path is the generalisation that also isolates
+unrelated runs.)
 """
 from __future__ import annotations
 
@@ -16,11 +24,25 @@ from typing import Iterator
 
 from ._util import now_iso
 
+# Process-wide registry of per-file append locks, so any two EventLedger
+# instances for the same file coordinate. `_REGISTRY_LOCK` guards the dict.
+_REGISTRY_LOCK = threading.Lock()
+_FILE_LOCKS: dict[str, threading.Lock] = {}
+
+
+def _lock_for(path: Path) -> threading.Lock:
+    key = str(path.resolve())
+    with _REGISTRY_LOCK:
+        lock = _FILE_LOCKS.get(key)
+        if lock is None:
+            lock = _FILE_LOCKS[key] = threading.Lock()
+        return lock
+
 
 class EventLedger:
     def __init__(self, path: Path):
         self.path = Path(path)
-        self._lock = threading.Lock()
+        self._lock = _lock_for(self.path)   # shared per-file, not per-instance
 
     def append(self, event: str, **fields) -> dict:
         """Append one event. Returns the written record (with its ts)."""

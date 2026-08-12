@@ -65,10 +65,13 @@ class RunStore:
     def __init__(self, root: Path):
         self.root = Path(root)
 
-    def create(self, *, pack_id: str, label: str, meta: dict | None = None) -> RunHandle:
-        """Create a run folder. `pack_id` records which research pack owns it;
-        `label` is a human slug (e.g. a market or mandate name). Extra `meta`
-        is merged in. Returns an open RunHandle with a `created` event logged."""
+    def create(self, *, pack_id: str, label: str, pack_version: str = "0",
+               meta: dict | None = None) -> RunHandle:
+        """Create a run folder. `pack_id` + `pack_version` record which research
+        pack (and which exact version of it) owns the run — persisted in run.json
+        AND in the `created` event, so a run stays reproducible/resumable against
+        the code version that produced it even as the pack evolves. `label` is a
+        human slug (market/mandate name). Extra `meta` is merged in."""
         stamp = datetime.now().strftime("%Y-%m-%d_%H%M")
         run_id = f"{stamp}_{slugify(label)}_{slugify(pack_id)}"
         run_dir = self.root / run_id
@@ -78,6 +81,7 @@ class RunStore:
         base = {
             "run_id": run_id,
             "pack_id": pack_id,
+            "pack_version": str(pack_version),
             "label": label,
             "status": "created",
             "created_at": now_iso(),
@@ -85,7 +89,7 @@ class RunStore:
         base.update(meta or {})
         h = RunHandle(run_dir)
         h.save_meta(base)
-        h.event("created", pack_id=pack_id, label=label)
+        h.event("created", pack_id=pack_id, pack_version=str(pack_version), label=label)
         return h
 
     def open(self, run_id: str) -> RunHandle:
