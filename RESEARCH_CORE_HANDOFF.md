@@ -256,6 +256,15 @@ expansion policy; all fixtures.
   duplicates are prevented only within a run, by target slug.
 - `Limits` currently enforces steps only in the Funds controller; wall-time /
   tokens / tool-calls are defined but unused offline.
+- **Pre-existing flaky company test (not a regression).**
+  `tests/test_concurrency.py::test_two_companies_parallel_with_per_thread_attribution`
+  asserts `len(seen_threads) == 2`, i.e. that both workers *genuinely* ran in
+  parallel. Under CPU contention (e.g. several suites at once) the pool can
+  serialise and the assertion fails `1 != 2`. Verified by running the test at
+  tag `company-intelligence-v1.0` in a separate worktree under the same load —
+  it fails there too, with this branch's code absent. Serial runs of the full
+  suite are consistently green (14/14 clean). Left unfixed: it is company code,
+  outside this branch's scope.
 
 ## Architectural decisions
 
