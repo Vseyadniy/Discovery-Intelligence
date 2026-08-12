@@ -587,15 +587,44 @@ class TestPackContract(unittest.TestCase):
         self.assertEqual(set(spec.rule_ids), set(fi.rules.ALL_RULE_IDS))
         self.assertIn("fund_graph", spec.outputs)
 
-    def test_funds_package_does_not_import_company_code(self):
+    def test_company_stack_is_confined_to_the_adapter_module(self):
+        """The production stack may be imported ONLY by the adapter
+        (`live_pass.py`). Every other Funds module — model, rules, pack,
+        controller, fixtures — must stay provider-free, so the domain logic and
+        the offline flow never depend on `src/`."""
         pkg = Path(fi.__file__).parent
         offenders = []
-        for py in list(pkg.glob("*.py")) + list(pkg.glob("*/*.py")):
+        for py in sorted(list(pkg.glob("*.py")) + list(pkg.glob("*/*.py"))):
+            if py.name == "live_pass.py":
+                continue                      # the one allowed boundary
             for ln in py.read_text(encoding="utf-8").splitlines():
                 s = ln.strip()
                 if s.startswith("import src") or s.startswith("from src ") or s.startswith("from src."):
                     offenders.append(f"{py.name}: {s}")
-        self.assertEqual(offenders, [])
+        self.assertEqual(offenders, [], f"src/ imported outside live_pass.py: {offenders}")
+
+    def test_offline_flow_never_imports_the_provider_stack(self):
+        """A fresh interpreter running the whole offline Funds flow must pull in
+        no `src.*` module — proof the offline slice is provider-free."""
+        import subprocess
+        import sys
+        repo = Path(fi.__file__).parent.parent
+        code = (
+            "import tempfile, sys; from pathlib import Path\n"
+            "from research_core import RunStore, ScriptedResearchPass\n"
+            "from funds_intelligence import FundsController, FundsMandate\n"
+            "from funds_intelligence import fixtures as fx\n"
+            "c = FundsController(RunStore(Path(tempfile.mkdtemp())))\n"
+            "h = c.create_run('m', FundsMandate(target_count=5))\n"
+            "c.run_landscape(h, ScriptedResearchPass(fx.landscape_script()))\n"
+            "c.approve_scope(h, fx.LANDSCAPE_TARGETS)\n"
+            "c.run_until_terminal(h, lambda t: ScriptedResearchPass(fx.target_script(t)))\n"
+            "bad=[m for m in sys.modules if m=='src' or m.startswith('src.')]\n"
+            "print('BAD' if bad else 'CLEAN', bad)\n")
+        r = subprocess.run([sys.executable, "-c", code], cwd=str(repo),
+                           capture_output=True, text=True, timeout=120)
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertTrue(r.stdout.startswith("CLEAN"), r.stdout + r.stderr)
 
 
 if __name__ == "__main__":

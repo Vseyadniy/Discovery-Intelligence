@@ -105,11 +105,37 @@ class FundsController:
                 inherited_evidence=len(inherited.evidence))
         return h
 
+    # ── paid-work approval (must precede ANY paid pass) ───────────────────
+    def approve_paid_work(self, h, *, approved_by: str = "operator",
+                          note: str = "") -> dict:
+        """Record explicit approval to spend money on this run. Persisted in
+        run.json + events.jsonl, so a resumed session cannot silently re-acquire
+        it. Mirrors the company Auto safety model."""
+        meta = h.update_meta(paid_work_approved=True,
+                             paid_work_approved_by=approved_by)
+        h.event("paid_work_approved", approved_by=approved_by, note=note)
+        return meta
+
+    def paid_work_approved(self, h) -> bool:
+        return bool(h.load_meta().get("paid_work_approved"))
+
+    def require_paid_approval(self, h, action: str) -> None:
+        """Raise BEFORE a paid pass unless approval is on file. Offline passes
+        (ScriptedResearchPass) are unaffected — the guard is only applied by
+        callers that run a live adapter."""
+        if not self.paid_work_approved(h):
+            h.event("paid_work_blocked", action=action)
+            raise PermissionError(
+                f"{action} would spend money but this run has no paid-work "
+                f"approval — call approve_paid_work() first (see Preview).")
+
     # ── phase 1: landscape ────────────────────────────────────────────────
     def run_landscape(self, h, research_pass) -> list[dict]:
         mandate = FundsMandate.from_dict(
             (h.load_meta().get("spec") or {}).get("params", {}).get("mandate"))
+        _guard_paid(self, h, research_pass, "landscape")
         res = research_pass.run_pass("funds landscape", f"mandate: {mandate.to_dict()}")
+        _log_usage(h, research_pass, stage="landscape")
         data = json.loads(res.text or "{}")
         candidates = []
         for c in (data.get("candidates") or [])[: max(1, mandate.target_count)]:
@@ -165,7 +191,9 @@ class FundsController:
 
     def research_one(self, h, research_pass, target: str) -> dict:
         """One safe step = exactly one fund target researched, gated, saved."""
+        _guard_paid(self, h, research_pass, f"research «{target}»")
         res = research_pass.run_pass(f"funds research: {target}", target)
+        _log_usage(h, research_pass, stage="research", target=target)
         graph = build_graph(json.loads(res.text or "{}"), res.grounding)
         result = self.registry.run(graph.to_dict(), self.rule_ids(h))
         h.subdir("targets")
@@ -225,7 +253,9 @@ class FundsController:
         graph = FundGraph.from_dict(payload["graph"])
         before_nodes, before_ev = len(graph.nodes), len(graph.evidence)
 
+        _guard_paid(self, h, research_pass, f"deep dive «{target}»")
         res = research_pass.run_pass(f"deep dive: {target}", target)
+        _log_usage(h, research_pass, stage="deep_dive", target=target)
         expand_graph(graph, json.loads(res.text or "{}"), res.grounding)
 
         result = self.registry.run(graph.to_dict(), self.rule_ids(h))
@@ -455,6 +485,29 @@ def expand_graph(g: FundGraph, reply: dict, grounding) -> FundGraph:
                             state=p.get("state", UNRESOLVED),
                             evidence_ids=[eid] if eid else [], props=props))
     return g
+
+
+# ── paid-pass guard + usage telemetry ────────────────────────────────────────
+def is_paid_pass(research_pass) -> bool:
+    """True when the pass will spend money. Duck-typed on purpose: the offline
+    ScriptedResearchPass has no `costs_money` attribute, the live adapter sets
+    it True — so this module never imports the provider stack."""
+    return bool(getattr(research_pass, "costs_money", False))
+
+
+def _guard_paid(controller, h, research_pass, action: str) -> None:
+    if is_paid_pass(research_pass):
+        controller.require_paid_approval(h, action)
+
+
+def _log_usage(h, research_pass, *, stage: str, target: str = "") -> None:
+    """Persist what the LAST pass actually consumed. No-op for offline passes
+    (nothing was spent); values come from the adapter's SourceLog harvest."""
+    usages = getattr(research_pass, "usages", None)
+    if not usages:
+        return
+    ev = usages[-1].as_event() if hasattr(usages[-1], "as_event") else dict(usages[-1])
+    h.event("pass_usage", stage=stage, **({"target": target} if target else {}), **ev)
 
 
 def _node_is_empty(v) -> bool:

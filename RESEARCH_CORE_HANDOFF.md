@@ -63,14 +63,16 @@ surface.
 - **Built & tested (executable):** all seven core modules above, plus the first
   pack — **`funds_intelligence/`**, a complete OFFLINE vertical slice that
   pressure-tested the core against a genuinely different domain.
-- **Contracts only (no wiring yet):** `ResearchPass` / `ModelGateway` /
-  `RetrievalGateway` / `Grounding` are Protocols. **No production adapter is
-  written** — no live model or search call exists anywhere in the core or the
-  Funds pack.
+- **Production adapter WIRED, not executed:** `funds_intelligence/live_pass.py`
+  implements `ResearchPass` over `src.model_router.collect()`. **No live call has
+  been made**; the whole suite runs with sockets blocked. `ModelGateway` /
+  `RetrievalGateway` remain unimplemented Protocols (not needed yet).
 - **Company Intelligence is untouched** and not routed through the core: `src/`,
   `prompts/`, `config/`, `app.py` are byte-identical to
   `company-intelligence-v1.0`.
-- **Tests: 371 total, 2 skipped** — 294 company (unchanged) + 33 core + 44 Funds.
+- **Tests: 406 total, 2 skipped** — 294 company (unchanged) + 33 core + 45 Funds
+  + 34 adapter/preview/CLI. The adapter tests run with `socket.socket` replaced,
+  so a real network call raises instead of leaking.
 
 ## Funds Intelligence — the first pack (`funds_intelligence/`)
 
@@ -82,8 +84,28 @@ Offline vertical slice. Purpose: prove the core against a domain that is a
 | `model.py` | typed graph + four-valued claim/relationship states |
 | `rules.py` | 8 deterministic semantic rules (registered callables) |
 | `pack.py` | `FundsPack` (implements `ResearchPack`) + `FundsMandate` |
-| `controller.py` | landscape → scope approval → one fund per safe step → gate → scoped repair → linked deep dive |
+| `controller.py` | landscape → scope approval → one fund per safe step → gate → scoped repair → linked deep dive; paid-work gate + per-pass usage telemetry |
+| `live_pass.py` | **the only module that imports `src/`** — `ResearchPass` over `model_router.collect()`, `SourceLog`→`Grounding`, usage + failure classification, provider pinning |
+| `preview.py` | zero-call exposure report (`LivePlan` → paid passes / tool-call ceiling / stop conditions) |
+| `__main__.py` | CLI: `preview` (free) · `live` / `research` / `deepdive` (paid, double-gated) |
 | `fixtures/` | 4 deliberately tricky synthetic mandates (scripted passes, no network) |
+
+### Production adapter boundary
+
+```
+funds_intelligence.LiveResearchPass   ← translation ONLY (no browsing logic)
+        │ calls
+        ▼
+src.model_router.collect()            ← provider + tool-loop orchestration
+        └─ src.web_tools               ← web_search / fetch_url / SourceLog / quota
+```
+
+`SourceLog` cannot be used as a `Grounding` directly — its `seen`/`fetched` are
+**dicts** while the protocol needs **methods**, so `SourceLogGrounding` wraps it
+and reuses `web_tools._norm` for URL comparison. Failure classification reuses
+`api_runner._error_category`. Enforced by tests: `src/` may be imported **only**
+by `live_pass.py`, and a fresh interpreter running the whole offline flow pulls
+in **no** `src.*` module.
 
 ### Key data relationships
 
@@ -268,43 +290,44 @@ python -m unittest discover -s tests                        # 371 tests, OK, 2 s
 The suite is now offline **regardless of `.env`** (verified green under
 `SEARCH_PROVIDER=tavily`, `=brave`, and unset, each with a dead proxy).
 
-## Next milestone — the first CONTROLLED LIVE Funds test (not yet executed)
+## Next milestone — the first CONTROLLED LIVE Funds test (READY, not executed)
 
-Deliberately small: one landscape query, ~2–3 funds, one small deep dive.
+**Mandate.** "Find European private equity managers investing in B2B software and
+tech-enabled services, with evidence of active buy-and-build activity during
+2022–2026."
 
-**1. Build the first `ResearchPass` adapter** (in `funds_intelligence/`, not the
-core) wrapping `src.model_router.collect()`:
+**Configured exposure** (from `python -m funds_intelligence preview`; all numbers
+derived from configuration, none estimated):
 
-```python
-class LiveResearchPass:                       # implements research_core.ResearchPass
-    def run_pass(self, system, user, *, budget=None) -> ResearchPassResult:
-        text, engine = model_router.collect(system, user, budget=budget)
-        return ResearchPassResult(text=text, engine=engine,
-                                  grounding=SourceLogAdapter(model_router.get_source_log()))
+| | |
+|---|---|
+| providers | `deepseek:deepseek-chat` + `tavily`, **no fallback**, concurrency 1 |
+| paid passes | **5** = 1 landscape + 3 manager research + 1 deep dive |
+| tool-call ceiling | **78** = 12 + 3×18 + 12 |
+| searches | **≤ 78** (upper bound: every tool call could be a search) |
+| max output tokens | **16,000** / pass → **80,000** / run |
+| earned budget extension | **0** (disabled for run #1) |
+| controller `max_steps` | 4 |
+| cost | **not reported** — `TOKEN_PRICE_IN/OUT` are not configured |
+
+**Gates before any spend:** zero-call Preview → `--approve-paid --yes` (both
+required) → provider pinning (`ProviderMismatch` if not deepseek+tavily) →
+landscape scope approval → one manager per safe step → pause/stop/resume via
+`control.json`.
+
+**Flow**
+
+```bash
+python -m funds_intelligence preview                       # free, read-only
+python -m funds_intelligence live --approve-paid --yes     # creates run + landscape, then STOPS
+python -m funds_intelligence approve <run_id> --targets "A" "B" "C"
+python -m funds_intelligence research <run_id> --yes       # one manager per step
+python -m funds_intelligence deepdive <run_id> --target "A" --yes
+python -m funds_intelligence status <run_id>
 ```
-`SourceLogAdapter` maps the company `SourceLog` onto the core `Grounding`
-protocol (`has_source` / `supports_value`). **Reuse `collect()`'s browsing
-orchestration as-is — do not reimplement search/fetch/budget inside Funds.**
 
-**2. Safety preconditions before the first paid call**
-- explicit approval gate for paid work (mirror `src.auto`: `--yes` / interactive);
-- `Limits(max_steps=4, max_tool_calls=…, max_wall_seconds=…)` enforced;
-- the existing scope-approval stop is already in place — keep it mandatory;
-- DeepSeek + one search provider only; strictly sequential; one fund per step.
-
-**3. The run**
-- mandate: a narrow, verifiable slice (e.g. "Baltic/CIS VC managers, vintages
-  2018–2024", `target_count=3`);
-- landscape → **review the candidates by hand** → approve 2–3;
-- research one fund per step; expect rejects — that is the point;
-- apply one scoped repair; then one deep dive on a single accepted fund.
-
-**4. What to measure** (offline analogues already pass, so this tests reality)
-- do the 8 rules fire on *real* sloppy sources, and are there false positives?
-- does grounding actually catch an ungrounded AUM/fund-size figure?
-- entity resolution: does the landscape return managers vs vehicles correctly?
-- spend per fund; whether one fund/step keeps the blast radius acceptable.
-
-**5. Before it runs:** write the run-folder + events to a scratch `logs/` root,
-keep `--plan`-style read-only preview first, and confirm zero spend on a dry
-pass. Only then enable the live adapter.
+**What to inspect afterwards:** `pass_usage` events (tokens/tool calls/searches
+per stage), `target_researched` verdicts + codes, whether the 8 rules fire on
+real sources and any false positives, whether grounding downgraded an ungrounded
+AUM/fund-size, manager-vs-vehicle typing in `landscape.json`, and the
+search error/rate-limit counters.
