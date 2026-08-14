@@ -270,8 +270,14 @@ class TestNoDuplicateOrchestration(unittest.TestCase):
 
 # ── controller integration: paid gate, telemetry, resume ─────────────────────
 class TestPaidWorkGate(unittest.TestCase):
-    def _live_stub(self, reply='{"candidates": []}'):
-        """A stand-in that declares itself paid but performs no work."""
+    def _live_stub(self, reply='{"candidates": [{"name": "Stub Capital Partners", '
+                               '"kind": "management_company", '
+                               '"source": "https://reg.example/stub"}]}'):
+        """A stand-in that declares itself paid but performs no work.
+
+        The reply must be a schema-valid landscape: an EMPTY candidate list is
+        now refused rather than advancing the run to scope approval, so an empty
+        stub would fail these tests for reasons unrelated to the paid gate."""
         class _Stub:
             costs_money = True
             usages = []
@@ -498,6 +504,59 @@ class TestCliSafety(unittest.TestCase):
             rc, collect, _ = self._run(["live", "--approve-paid", "--yes"])
         self.assertEqual(rc, 1)
         collect.assert_not_called()
+
+
+class TestExtractorMatchesCompanyPrimitive(unittest.TestCase):
+    """`funds_intelligence.extract_json` is a PORT of `model_router.extract_json`,
+    not an import — the pack may not depend on `src/` outside `live_pass.py`.
+
+    A port silently drifting from its original is exactly the kind of decay the
+    isolation boundary invites, so pin them together: both sides see the same
+    provider-shaped battery and must agree, value for value and failure for
+    failure. If either implementation changes, this test fails."""
+
+    CASES = [
+        '{"candidates": []}',
+        '{"a": 1, "b": {"c": [1, 2, {"d": "e"}]}}',
+        '```json\n{"a": 1}\n```',
+        '```\n{"a": 1}\n```',
+        'Here is the result:\n\n{"a": 1}\n\nHope that helps.',
+        'Preamble ```json\n{"a": {"nested": {"deep": true}}}\n``` trailing text',
+        '{"unicode": "€8.5bn — Verdane"}',
+        '{"a": 1} {"b": 2}',                       # first object wins
+        '',                                        # no object at all
+        'no json here',
+        '{"truncated": ',                          # unbalanced
+        '{bad json}',                              # balanced but not JSON
+    ]
+
+    def test_identical_results_and_identical_failures(self):
+        from src.model_router import extract_json as company_extract
+        from funds_intelligence.extraction import extract_json as funds_extract
+        for text in self.CASES:
+            with self.subTest(text=text[:40]):
+                try:
+                    expected = company_extract(text)
+                    err = None
+                except Exception as ex:            # noqa: BLE001 — compare failures too
+                    expected, err = None, type(ex)
+                if err is None:
+                    self.assertEqual(funds_extract(text), expected)
+                else:
+                    with self.assertRaises(err):
+                        funds_extract(text)
+
+    def test_the_port_is_textually_the_same_algorithm(self):
+        """Cheap guard against a rewrite that happens to pass the battery."""
+        import inspect
+        from src import model_router
+        from funds_intelligence import extraction
+        def body(fn):
+            src = inspect.getsource(fn)
+            src = src[src.index('"""', src.index('"""') + 3) + 3:]
+            return "".join(src.split())
+        self.assertEqual(body(extraction.extract_json),
+                         body(model_router.extract_json))
 
 
 if __name__ == "__main__":

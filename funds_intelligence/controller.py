@@ -32,6 +32,12 @@ from .model import (
     TIER_PRIMARY, TIER_REPUTABLE, TIER_WEAK,
 )
 from .pack import FundsPack, FundsMandate
+from . import prompts
+from .extraction import (
+    MalformedPassOutput, extract_json,
+    validate_landscape, validate_research, validate_deep_dive,
+)
+from .rawstore import save_raw
 
 AWAITING_SCOPE = "awaiting-scope-approval"
 
@@ -131,12 +137,12 @@ class FundsController:
 
     # ── phase 1: landscape ────────────────────────────────────────────────
     def run_landscape(self, h, research_pass) -> list[dict]:
-        mandate = FundsMandate.from_dict(
-            (h.load_meta().get("spec") or {}).get("params", {}).get("mandate"))
+        mandate = self.mandate_of(h)
         _guard_paid(self, h, research_pass, "landscape")
-        res = research_pass.run_pass("funds landscape", f"mandate: {mandate.to_dict()}")
+        system, user = prompts.landscape_prompt(mandate)
+        res = research_pass.run_pass(system, user)
         _log_usage(h, research_pass, stage="landscape")
-        data = json.loads(res.text or "{}")
+        data = _capture(h, res, stage="landscape", validate=validate_landscape)
         candidates = []
         for c in (data.get("candidates") or [])[: max(1, mandate.target_count)]:
             if not mandate.in_window(c.get("vintage")):
@@ -192,9 +198,12 @@ class FundsController:
     def research_one(self, h, research_pass, target: str) -> dict:
         """One safe step = exactly one fund target researched, gated, saved."""
         _guard_paid(self, h, research_pass, f"research «{target}»")
-        res = research_pass.run_pass(f"funds research: {target}", target)
+        system, user = prompts.research_prompt(target, self.mandate_of(h))
+        res = research_pass.run_pass(system, user)
         _log_usage(h, research_pass, stage="research", target=target)
-        graph = build_graph(json.loads(res.text or "{}"), res.grounding)
+        data = _capture(h, res, stage="research", target=target,
+                        validate=validate_research)
+        graph = build_graph(data, res.grounding)
         result = self.registry.run(graph.to_dict(), self.rule_ids(h))
         h.subdir("targets")
         payload = {"target": target, "graph": graph.to_dict(),
@@ -216,6 +225,12 @@ class FundsController:
 
     def rule_ids(self, h) -> list[str]:
         return list((h.load_meta().get("spec") or {}).get("rule_ids") or [])
+
+    def mandate_of(self, h) -> FundsMandate:
+        """The run's mandate, from run.json — every stage prompt is built from
+        it, so a resumed session cannot research under a different mandate."""
+        return FundsMandate.from_dict(
+            (h.load_meta().get("spec") or {}).get("params", {}).get("mandate"))
 
     # ── phase 3: scoped repair ────────────────────────────────────────────
     def repair_target(self, h, target: str, patch: RepairPatch) -> dict:
@@ -254,9 +269,16 @@ class FundsController:
         before_nodes, before_ev = len(graph.nodes), len(graph.evidence)
 
         _guard_paid(self, h, research_pass, f"deep dive «{target}»")
-        res = research_pass.run_pass(f"deep dive: {target}", target)
+        system, user = prompts.deep_dive_prompt(
+            target, self.mandate_of(h),
+            known_vehicles=[n.name for n in graph.by_kind(FUND_VEHICLE)]
+            + [n.name for n in graph.by_kind(CONTINUATION_VEHICLE)],
+            known_portfolio=[n.name for n in graph.by_kind(PORTFOLIO_COMPANY)])
+        res = research_pass.run_pass(system, user)
         _log_usage(h, research_pass, stage="deep_dive", target=target)
-        expand_graph(graph, json.loads(res.text or "{}"), res.grounding)
+        data = _capture(h, res, stage="deep_dive", target=target,
+                        validate=validate_deep_dive)
+        expand_graph(graph, data, res.grounding)
 
         result = self.registry.run(graph.to_dict(), self.rule_ids(h))
         out = {"target": target, "graph": graph.to_dict(),
@@ -440,7 +462,13 @@ def build_graph(reply: dict, grounding) -> FundGraph:
 
     for pc in reply.get("portfolio") or []:
         node = g.add_node(Node(PORTFOLIO_COMPANY, pc.get("company", "")))
+        # A model cannot know the evidence ids this function generates, so a
+        # portfolio entry sources its relationship with a URL like every other
+        # claim; pre-resolved ids stay supported for inherited/patched graphs.
         evs = [i for i in (pc.get("evidence") or []) if i]
+        eid = _evidence_from(g, pc.get("source", ""), grounding)
+        if eid:
+            evs.append(eid)
         vehicle = next(iter(g.by_kind(FUND_VEHICLE)), None)
         if vehicle is not None:
             g.add_edge(Edge(INVESTED_IN, vehicle.id, node.id,
@@ -498,6 +526,46 @@ def is_paid_pass(research_pass) -> bool:
 def _guard_paid(controller, h, research_pass, action: str) -> None:
     if is_paid_pass(research_pass):
         controller.require_paid_approval(h, action)
+
+
+def _capture(h, res, *, stage: str, target: str = "", validate=None) -> dict:
+    """The paid-output boundary: PERSIST → extract → validate → (caller persists
+    the structured artifact).
+
+    The raw response is written to `raw/` before anything can fail, so a paid
+    pass is never lost to an exception. Extraction uses the fence-tolerant
+    company primitive, not `json.loads`. On any failure this raises
+    `MalformedPassOutput` carrying the raw path — and, critically, writes NO
+    artifact and updates NO status, so the stage stays exactly as retryable as
+    it was before the call.
+    """
+    tag = {"target": target} if target else {}
+    raw = save_raw(h, stage=stage, target=target, text=res.text or "",
+                   engine=getattr(res, "engine", ""),
+                   tokens=getattr(res, "tokens", 0))
+    h.event("pass_output_saved", stage=stage, **tag, raw=raw.name,
+            chars=len(res.text or ""))
+    try:
+        data = extract_json(res.text or "")
+    except (ValueError, json.JSONDecodeError) as ex:
+        reason = f"{type(ex).__name__}: {ex}"
+        h.event("pass_output_unparsable", stage=stage, **tag, raw=raw.name,
+                reason=reason[:300])
+        raise MalformedPassOutput(
+            f"{stage} pass returned output that is not JSON — the response is "
+            f"kept at {raw}; nothing was persisted and the stage can be retried.",
+            stage=stage, target=target, raw_path=raw, reason=reason) from ex
+
+    problem = validate(data) if validate else ""
+    if problem:
+        h.event("pass_output_invalid", stage=stage, **tag, raw=raw.name,
+                reason=problem[:300])
+        raise MalformedPassOutput(
+            f"{stage} pass returned JSON that does not match the expected "
+            f"schema ({problem}) — the response is kept at {raw}; nothing was "
+            f"persisted and the stage can be retried.",
+            stage=stage, target=target, raw_path=raw, reason=problem)
+    return data
 
 
 def _log_usage(h, research_pass, *, stage: str, target: str = "") -> None:

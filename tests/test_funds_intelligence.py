@@ -627,5 +627,317 @@ class TestPackContract(unittest.TestCase):
         self.assertTrue(r.stdout.startswith("CLEAN"), r.stdout + r.stderr)
 
 
+# ── the production contract: raw persistence, extraction, prompts ────────────
+#
+# These cover the defect that killed the first live landscape pass: the
+# controller did `json.loads(res.text)` on raw provider text and kept no copy,
+# so a fenced or prose-wrapped reply destroyed a fully-paid pass. Every test
+# here fails against the pre-fix controller.
+class _FakePass:
+    """A pass that returns EXACTLY the text given — the provider-shaped inputs
+    a ScriptedResearchPass never produces (it always emits clean JSON, which is
+    precisely why the offline suite missed this)."""
+
+    def __init__(self, text: str, *, paid: bool = False):
+        self.text = text
+        self.costs_money = paid
+        self.usages = []
+
+    def run_pass(self, system, user, *, budget=None):
+        from research_core import ResearchPassResult
+        self.system, self.user = system, user
+        return ResearchPassResult(text=self.text, grounding=None, engine="fake")
+
+
+_LANDSCAPE_OBJ = {"candidates": [
+    {"name": "Verdane Capital Advisors", "kind": "management_company",
+     "source": "https://reg.example/verdane"}]}
+_RESEARCH_OBJ = {
+    "management_company": {"name": "Verdane Capital Advisors",
+                           "aum": {"value": "€8.5bn", "state": "confirmed",
+                                   "source": "https://reg.example/verdane"}},
+    "vehicles": [{"name": "Verdane Edda II", "vintage": 2021,
+                  "fund_size": {"value": "€300m", "state": "confirmed",
+                                "source": "https://reg.example/verdane"}}],
+}
+
+
+class TestProviderShapedOutputIsAccepted(unittest.TestCase):
+    """A real provider does not return a bare JSON document."""
+
+    def _landscape_with(self, text):
+        d = tempfile.mkdtemp()
+        c, _ = _controller(d)
+        h = c.create_run("m", FundsMandate(target_count=3))
+        return c, h, c.run_landscape(h, _FakePass(text))
+
+    def test_plain_json_object(self):
+        _, _, cands = self._landscape_with(json.dumps(_LANDSCAPE_OBJ))
+        self.assertEqual([x["name"] for x in cands], ["Verdane Capital Advisors"])
+
+    def test_fenced_json_is_extracted(self):
+        text = "```json\n" + json.dumps(_LANDSCAPE_OBJ) + "\n```"
+        _, _, cands = self._landscape_with(text)
+        self.assertEqual([x["name"] for x in cands], ["Verdane Capital Advisors"])
+
+    def test_unlabelled_fence_is_extracted(self):
+        text = "```\n" + json.dumps(_LANDSCAPE_OBJ) + "\n```"
+        _, _, cands = self._landscape_with(text)
+        self.assertEqual(len(cands), 1)
+
+    def test_prose_preamble_and_trailing_commentary_are_stripped(self):
+        text = ("Here is what I found after searching several sources.\n\n"
+                + json.dumps(_LANDSCAPE_OBJ)
+                + "\n\nLet me know if you would like more detail.")
+        _, _, cands = self._landscape_with(text)
+        self.assertEqual(len(cands), 1)
+
+    def test_nested_braces_do_not_truncate_the_object(self):
+        obj = {"candidates": [{"name": "A", "kind": "management_company",
+                               "aum": {"value": "€1bn", "state": "confirmed",
+                                       "source": "https://reg.example/a"}}]}
+        _, _, cands = self._landscape_with("```json\n" + json.dumps(obj) + "\n```")
+        self.assertEqual(cands[0]["aum"]["value"], "€1bn")
+
+
+class TestMalformedOutputFailsSafe(unittest.TestCase):
+    """Unusable output must be diagnosable, non-advancing and retryable."""
+
+    def _attempt(self, text, tmp):
+        c, _ = _controller(tmp)
+        h = c.create_run("m", FundsMandate(target_count=3))
+        with self.assertRaises(fi.MalformedPassOutput) as ctx:
+            c.run_landscape(h, _FakePass(text))
+        return c, h, ctx.exception
+
+    def test_prose_only_reply_raises_and_keeps_the_raw_response(self):
+        with tempfile.TemporaryDirectory() as d:
+            text = "I was unable to complete this research within the tool budget."
+            c, h, ex = self._attempt(text, d)
+            self.assertTrue(ex.raw_path.exists())
+            self.assertEqual(ex.raw_path.read_text(encoding="utf-8"), text)
+            self.assertEqual(ex.stage, "landscape")
+
+    def test_run_state_does_not_advance(self):
+        with tempfile.TemporaryDirectory() as d:
+            c, h, _ = self._attempt("no json here at all", d)
+            self.assertEqual(h.load_meta()["status"], "created")
+            self.assertNotEqual(h.load_meta().get("status"), fi.AWAITING_SCOPE)
+            self.assertFalse(h.path("landscape.json").exists())
+            self.assertIsNone(h.ledger.last("landscape_built"))
+            self.assertIsNone(h.ledger.last("awaiting_scope_approval"))
+
+    def test_failure_is_recorded_in_the_ledger_with_the_raw_filename(self):
+        with tempfile.TemporaryDirectory() as d:
+            c, h, ex = self._attempt("nothing structured", d)
+            ev = h.ledger.last("pass_output_unparsable")
+            self.assertIsNotNone(ev)
+            self.assertEqual(ev["raw"], ex.raw_path.name)
+            self.assertIsNotNone(h.ledger.last("pass_output_saved"))
+
+    def test_truncated_json_is_refused_not_silently_half_parsed(self):
+        with tempfile.TemporaryDirectory() as d:
+            text = '{"candidates": [{"name": "Half Written Capital"'
+            c, h, _ = self._attempt(text, d)
+            self.assertFalse(h.path("landscape.json").exists())
+
+    def test_schema_valid_json_of_the_wrong_shape_is_refused(self):
+        with tempfile.TemporaryDirectory() as d:
+            c, h, ex = self._attempt('{"managers": ["Some Firm"]}', d)
+            self.assertIn("candidates", ex.reason)
+            self.assertIsNotNone(h.ledger.last("pass_output_invalid"))
+            self.assertFalse(h.path("landscape.json").exists())
+
+    def test_empty_candidate_list_does_not_advance_to_scope_approval(self):
+        with tempfile.TemporaryDirectory() as d:
+            c, h, _ = self._attempt('{"candidates": []}', d)
+            self.assertEqual(h.load_meta()["status"], "created")
+
+    def test_retry_after_a_failure_succeeds_and_preserves_both_responses(self):
+        """The paid-response-loss scenario, end to end."""
+        with tempfile.TemporaryDirectory() as d:
+            c, _ = _controller(d)
+            h = c.create_run("m", FundsMandate(target_count=3))
+            with self.assertRaises(fi.MalformedPassOutput):
+                c.run_landscape(h, _FakePass("sorry, prose only"))
+            cands = c.run_landscape(h, _FakePass(json.dumps(_LANDSCAPE_OBJ)))
+            self.assertEqual(len(cands), 1)
+            self.assertEqual(h.load_meta()["status"], fi.AWAITING_SCOPE)
+            raws = fi.list_raw(h)
+            self.assertEqual(len(raws), 2, "the failed attempt must not be overwritten")
+            self.assertEqual(raws[0].read_text(encoding="utf-8"), "sorry, prose only")
+
+
+class TestRawIsPersistedBeforeParsing(unittest.TestCase):
+    def test_successful_pass_also_keeps_its_raw_response(self):
+        with tempfile.TemporaryDirectory() as d:
+            c, _ = _controller(d)
+            h = c.create_run("m", FundsMandate(target_count=3))
+            c.run_landscape(h, _FakePass(json.dumps(_LANDSCAPE_OBJ)))
+            raws = fi.list_raw(h)
+            self.assertEqual(len(raws), 1)
+            meta = json.loads(raws[0].with_suffix(".json").read_text(encoding="utf-8"))
+            self.assertEqual(meta["stage"], "landscape")
+            self.assertEqual(meta["engine"], "fake")
+
+    def test_raw_is_written_even_when_extraction_will_fail(self):
+        """Ordering is the whole point: persist happens BEFORE extract."""
+        with tempfile.TemporaryDirectory() as d:
+            c, _ = _controller(d)
+            h = c.create_run("m", FundsMandate(target_count=3))
+            with self.assertRaises(fi.MalformedPassOutput):
+                c.run_landscape(h, _FakePass("prose"))
+            self.assertEqual(len(fi.list_raw(h)), 1)
+
+    def test_every_paid_stage_persists_raw(self):
+        """research and deep_dive must not repeat the landscape's mistake."""
+        with tempfile.TemporaryDirectory() as d:
+            c, _ = _controller(d)
+            h = c.create_run("m", FundsMandate(target_count=3))
+            c.run_landscape(h, _FakePass(json.dumps(_LANDSCAPE_OBJ)))
+            c.approve_scope(h, ["Verdane Capital Advisors"])
+            c.research_one(h, _FakePass("```json\n" + json.dumps(_RESEARCH_OBJ) + "\n```"),
+                           "Verdane Capital Advisors")
+            stages = [json.loads(p.with_suffix(".json").read_text(encoding="utf-8"))["stage"]
+                      for p in fi.list_raw(h)]
+            self.assertEqual(stages, ["landscape", "research"])
+
+
+class TestResearchAndDeepDiveShareTheContract(unittest.TestCase):
+    """The identical gap must be closed on the two stages we have not run yet."""
+
+    def _to_scope(self, c, h):
+        c.run_landscape(h, _FakePass(json.dumps(_LANDSCAPE_OBJ)))
+        c.approve_scope(h, ["Verdane Capital Advisors"])
+
+    def test_research_accepts_fenced_json(self):
+        with tempfile.TemporaryDirectory() as d:
+            c, _ = _controller(d)
+            h = c.create_run("m", FundsMandate(target_count=3))
+            self._to_scope(c, h)
+            out = c.research_one(
+                h, _FakePass("```json\n" + json.dumps(_RESEARCH_OBJ) + "\n```"),
+                "Verdane Capital Advisors")
+            self.assertEqual(out["target"], "Verdane Capital Advisors")
+
+    def test_research_malformed_leaves_the_target_pending_and_writes_nothing(self):
+        with tempfile.TemporaryDirectory() as d:
+            c, _ = _controller(d)
+            h = c.create_run("m", FundsMandate(target_count=3))
+            self._to_scope(c, h)
+            with self.assertRaises(fi.MalformedPassOutput):
+                c.research_one(h, _FakePass("I could not find this manager."),
+                               "Verdane Capital Advisors")
+            # neither accepted nor rejected → still in the research queue,
+            # so a retry resumes at exactly this manager
+            self.assertEqual(c.pending_targets(h), ["Verdane Capital Advisors"])
+            self.assertEqual(c.rejected_targets(h), [])
+            self.assertIsNone(h.ledger.last("target_researched"))
+
+    def test_deep_dive_malformed_leaves_the_inherited_graph_untouched(self):
+        with tempfile.TemporaryDirectory() as d:
+            c, store = _controller(d)
+            h = c.create_run("m", FundsMandate(target_count=3))
+            self._to_scope(c, h)
+            c.research_one(h, _FakePass(json.dumps(_RESEARCH_OBJ)),
+                           "Verdane Capital Advisors")
+            child = c.create_deep_dive(h, "Verdane Capital Advisors")
+            gpath = child.path("targets", "verdane-capital-advisors.json")
+            before = gpath.read_text(encoding="utf-8")
+            with self.assertRaises(fi.MalformedPassOutput):
+                c.expand_deep_dive(child, _FakePass("no deals were found, sorry"))
+            self.assertEqual(gpath.read_text(encoding="utf-8"), before)
+            self.assertIsNone(child.ledger.last("deep_dive_expanded"))
+            self.assertEqual(len(fi.list_raw(child)), 1)
+
+
+class TestProductionPromptsAreRealPrompts(unittest.TestCase):
+    """The live path previously sent the literal string «funds landscape» as its
+    system prompt — no schema, no entity rules, no evidence discipline."""
+
+    def _mandate(self):
+        return FundsMandate(geography=["Europe"], window_from=2022, window_to=2026,
+                            filters={"sector": "B2B software"}, target_count=3)
+
+    def test_landscape_prompt_declares_schema_and_constraints(self):
+        system, user = fi.prompts.landscape_prompt(self._mandate())
+        self.assertIn('"candidates"', system)
+        self.assertIn("management_company", system)
+        self.assertIn("Europe", user)
+        self.assertIn("2022–2026", user)
+        self.assertGreater(len(system), 1500)
+
+    def test_research_prompt_declares_every_consumed_schema_key(self):
+        system, _ = fi.prompts.research_prompt("Some Manager", self._mandate())
+        for key in ("management_company", "vehicles", "continuation_vehicles",
+                    "people", "portfolio", "fund_size", "vintage", "role_status",
+                    "continues", "marketing"):
+            self.assertIn(key, system, f"schema key «{key}» missing from the prompt")
+
+    def test_prompts_state_the_distinctions_the_rules_enforce(self):
+        system, _ = fi.prompts.research_prompt("Some Manager", self._mandate())
+        low = system.lower()
+        for phrase in ("aum", "fund size", "vintage", "unresolved", "marketing",
+                       "source"):
+            self.assertIn(phrase, low)
+
+    def test_deep_dive_prompt_pins_vehicle_names_verbatim(self):
+        system, _ = fi.prompts.deep_dive_prompt(
+            "Some Manager", self._mandate(),
+            known_vehicles=["Edda II", "Edda III"], known_portfolio=["Acme"])
+        self.assertIn("Edda II", system)
+        self.assertIn("Edda III", system)
+        self.assertIn("Acme", system)
+
+    def test_controller_sends_the_production_prompt_not_a_label(self):
+        with tempfile.TemporaryDirectory() as d:
+            c, _ = _controller(d)
+            h = c.create_run("m", FundsMandate(target_count=3))
+            p = _FakePass(json.dumps(_LANDSCAPE_OBJ))
+            c.run_landscape(h, p)
+            self.assertNotEqual(p.system, "funds landscape")
+            self.assertIn('"candidates"', p.system)
+
+    def test_every_stage_prompt_is_built_from_the_persisted_mandate(self):
+        """A resumed session must research under the run's own mandate."""
+        with tempfile.TemporaryDirectory() as d:
+            c, store = _controller(d)
+            h = c.create_run("m", FundsMandate(geography=["Nordics"],
+                                               window_from=2019, window_to=2021,
+                                               target_count=3))
+            p = _FakePass(json.dumps(_LANDSCAPE_OBJ))
+            c.run_landscape(store.open(h.run_id), p)
+            self.assertIn("Nordics", p.user)
+            self.assertIn("2019–2021", p.user)
+
+
+class TestPortfolioRelationshipCanBeSourced(unittest.TestCase):
+    """A model cannot know the evidence ids build_graph generates, so a
+    portfolio entry must be able to carry a source URL instead."""
+
+    def test_portfolio_source_becomes_relationship_evidence(self):
+        g = fi.build_graph({
+            "management_company": {"name": "M"},
+            "vehicles": [{"name": "M Fund I", "vintage": 2021,
+                          "fund_size": {"value": "$100m", "state": "confirmed",
+                                        "source": "https://reg.example/m"}}],
+            "portfolio": [{"company": "Acme", "state": "confirmed",
+                           "source": "https://press.example/acme-deal"}],
+        }, None)
+        edges = g.edges_of(INVESTED_IN)
+        self.assertEqual(len(edges), 1)
+        self.assertTrue(edges[0].evidence_ids)
+        self.assertTrue(g.evidence_for(edges[0]))
+
+    def test_unsourced_portfolio_entry_still_trips_the_rule(self):
+        g = fi.build_graph({
+            "management_company": {"name": "M"},
+            "vehicles": [{"name": "M Fund I", "vintage": 2021}],
+            "portfolio": [{"company": "Acme", "state": "confirmed"}],
+        }, None)
+        result = FundsPack().registry().run(g.to_dict(), fi.rules.ALL_RULE_IDS)
+        self.assertIn("unsupported-relationship", result.codes())
+
+
 if __name__ == "__main__":
     unittest.main()

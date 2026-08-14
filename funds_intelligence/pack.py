@@ -11,7 +11,11 @@ from research_core import OutputSpec, ResearchSpec, RuleRegistry
 from . import rules
 
 PACK_ID = "funds"
-PACK_VERSION = "0.1.0"      # persisted on every run this pack creates
+# Persisted on every run this pack creates. 0.2.0 = the first version with a
+# real production contract: stage prompts that declare the output schema, and
+# persist-then-extract-then-validate at the paid-output boundary. A 0.1.0 run is
+# NOT comparable — its passes were sent a bare label as their system prompt.
+PACK_VERSION = "0.2.0"
 
 
 @dataclass

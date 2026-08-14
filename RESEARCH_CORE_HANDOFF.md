@@ -26,7 +26,9 @@ Trends/Cases, Technology, Pricing, Telegram…) can share.
   for the next pack.
 - **No company migration.** Company Intelligence keeps running on `src/`,
   untouched and unrouted through the core.
-- **No live/paid requests** anywhere in the core, the Funds pack, or the tests.
+- **No live/paid requests** in the core or in the tests. The Funds pack has a
+  paid path, reachable only through the double-gated CLI (see the live
+  milestone); `research_core/` itself stays provider-free and offline.
 - No desktop UI and no natural-language planner yet.
 
 ## Module boundaries (`research_core/`, pure stdlib)
@@ -63,15 +65,17 @@ surface.
 - **Built & tested (executable):** all seven core modules above, plus the first
   pack — **`funds_intelligence/`**, a complete OFFLINE vertical slice that
   pressure-tested the core against a genuinely different domain.
-- **Production adapter WIRED, not executed:** `funds_intelligence/live_pass.py`
-  implements `ResearchPass` over `src.model_router.collect()`. **No live call has
-  been made**; the whole suite runs with sockets blocked. `ModelGateway` /
-  `RetrievalGateway` remain unimplemented Protocols (not needed yet).
+- **Production adapter EXECUTED ONCE (landscape only):** `live_pass.py`
+  implements `ResearchPass` over `src.model_router.collect()`. Exactly **one**
+  paid pass has ever run — the 2026-08-13 landscape attempt below, which
+  exposed two structural defects and produced no artifact. The whole test suite
+  still runs with sockets blocked. `ModelGateway` / `RetrievalGateway` remain
+  unimplemented Protocols (not needed yet).
 - **Company Intelligence is untouched** and not routed through the core: `src/`,
   `prompts/`, `config/`, `app.py` are byte-identical to
   `company-intelligence-v1.0`.
-- **Tests: 406 total, 2 skipped** — 294 company (unchanged) + 33 core + 45 Funds
-  + 34 adapter/preview/CLI. The adapter tests run with `socket.socket` replaced,
+- **Tests: 434 total, 2 skipped** — 294 company (unchanged) + 33 core + 71 Funds
+  + 36 adapter/preview/CLI. The adapter tests run with `socket.socket` replaced,
   so a real network call raises instead of leaking.
 
 ## Funds Intelligence — the first pack (`funds_intelligence/`)
@@ -86,8 +90,11 @@ Offline vertical slice. Purpose: prove the core against a domain that is a
 | `pack.py` | `FundsPack` (implements `ResearchPack`) + `FundsMandate` |
 | `controller.py` | landscape → scope approval → one fund per safe step → gate → scoped repair → linked deep dive; paid-work gate + per-pass usage telemetry |
 | `live_pass.py` | **the only module that imports `src/`** — `ResearchPass` over `model_router.collect()`, `SourceLog`→`Grounding`, usage + failure classification, provider pinning |
+| `prompts.py` | **the production contract** — landscape / research / deep-dive system+user prompts: output schema, entity distinctions, evidence discipline, unresolved behaviour, mandate constraints |
+| `extraction.py` | `extract_json` (port of the company primitive) + `MalformedPassOutput` + structural per-stage validators |
+| `rawstore.py` | every paid response persisted verbatim under `raw/`, before any parsing |
 | `preview.py` | zero-call exposure report (`LivePlan` → paid passes / tool-call ceiling / stop conditions) |
-| `__main__.py` | CLI: `preview` (free) · `live` / `research` / `deepdive` (paid, double-gated) |
+| `__main__.py` | CLI: `preview` (free) · `live` / `relandscape` / `research` / `deepdive` (paid, double-gated) |
 | `fixtures/` | 4 deliberately tricky synthetic mandates (scripted passes, no network) |
 
 ### Production adapter boundary
@@ -244,8 +251,11 @@ expansion policy; all fixtures.
 
 ## Remaining limitations
 
-- **Offline only.** No live model/search adapter; `ResearchPass` has exactly one
-  implementation (`ScriptedResearchPass`).
+- **One live landscape pass executed; no live run has yet completed a stage.**
+  `ResearchPass` now has two implementations (`ScriptedResearchPass` offline,
+  `LiveResearchPass` on the paid path), but no manager has been researched live
+  and no deep dive has been run live. Research and deep dive share the fixed
+  production contract, verified offline — not yet verified against a provider.
 - **No UI, no NL planner, no deliverable writer** (outputs are declared in
   `OutputSpec` but no xlsx/docx builder exists for Funds).
 - Landscape candidate generation is fixture-driven; there is no real discovery
@@ -289,17 +299,116 @@ expansion policy; all fixtures.
 
 ```bash
 # Funds pack only (offline)
-python -m unittest tests.test_funds_intelligence            # 44 tests, OK
+python -m unittest tests.test_funds_intelligence            # 71 tests, OK
 # core only (offline)
 python -m unittest tests.test_research_core                 # 33 tests, OK
 # full suite = company (unchanged) + core + Funds
-python -m unittest discover -s tests                        # 371 tests, OK, 2 skipped
+python -m unittest discover -s tests                        # 434 tests, OK, 2 skipped
 ```
 
 The suite is now offline **regardless of `.env`** (verified green under
 `SEARCH_PROVIDER=tavily`, `=brave`, and unset, each with a dead proxy).
 
-## Next milestone — the first CONTROLLED LIVE Funds test (READY, not executed)
+## The first live landscape attempt — one pass spent, two defects found
+
+**Run `2026-08-13_1728_…_funds` (pack 0.1.0), landscape stage.** The pass itself
+succeeded end to end: `deepseek-chat+tools`, 12/12 tool calls, 10 searches, 2
+fetches, 70 URLs seen, 112,439 in / 2,822 out tokens, 64.5 s, no quota / rate-
+limit / provider errors. Provider pinning, the paid-work gate and the telemetry
+all behaved. Then the controller died in
+`json.loads(res.text)` — `JSONDecodeError: Expecting value: line 1 column 1`.
+
+Two structural defects, both invisible offline because `ScriptedResearchPass`
+returns canned, already-correct JSON — so neither the prompt nor the parser was
+ever exercised against provider-shaped output.
+
+**Defect 3 — the live path had no prompt.** `run_landscape` called
+`run_pass("funds landscape", f"mandate: {…}")`. The *system prompt was the
+literal string* `"funds landscape"`: it never asked for JSON, never declared the
+`{"candidates": […]}` shape the next line parses, never stated the
+manco-vs-vehicle typing or the evidence rules the eight deterministic rules
+enforce. Same at `research_one` (`"funds research: <name>"`) and
+`expand_deep_dive` (`"deep dive: <name>"`). `prompts/` held only the three
+company prompts; there were no Funds prompts anywhere.
+
+**Defect 4 — raw paid output was discarded.** The parse was a bare `json.loads`
+on raw model text (the company path has handled fences since day one, in
+`model_router.extract_json`), and `res.text` was never persisted. On the parse
+failure the entire paid response was lost: 115k tokens bought, zero bytes kept.
+
+Root cause of both: `ResearchPass` was wired but never executed, so the whole
+text→structure boundary was untested against a real provider.
+
+## The fix — the production contract (pack 0.2.0)
+
+**1. Real production prompts (`prompts.py`).** Three stage prompts built from the
+existing sources of truth — `model.py` (node/edge kinds, four claim states,
+source tiers), `rules.py` (each prohibition maps to the rule that rejects it) and
+`pack.py` (`FundsMandate` supplies geography, window, filters, target count).
+Each declares the exact JSON schema `build_graph` / `expand_graph` consume, the
+six-node-kind distinctions (AUM vs fund size, vintage required on a vehicle,
+continuation vehicles stay separate, roles are time-bound), the evidence
+discipline (a confirmed claim needs a retrieved source URL; the value must appear
+in the page text; GP marketing is weak and must be flagged), unresolved-not-
+negative behaviour, the mandate's geography/window constraints, and an explicit
+ban on unsupported inference. All Funds semantics stay in the pack;
+`research_core` gained nothing.
+
+Every stage prompt is built from the **persisted** mandate (`mandate_of`), so a
+resumed session cannot research under a different mandate. The deep-dive prompt
+is given the inherited graph's vehicle names verbatim, because a deal whose
+`vehicle` does not match an existing vehicle cannot be linked and is rejected as
+an unsupported relationship.
+
+**2. Persist → extract → validate → persist (`rawstore.py`, `extraction.py`,
+`controller._capture`).** The ordering is now the invariant, on all three paid
+stages:
+
+```
+raw/NNN-<stage>[-<target>].txt   ← written verbatim BEFORE anything can fail
+        ↓  extract_json (fence-tolerant, brace-matched)
+        ↓  structural validator for the stage
+landscape.json / targets/<t>.json / rejected/<t>.json   ← only now
+```
+
+Failure raises `MalformedPassOutput` carrying the raw path, logs
+`pass_output_saved` + `pass_output_unparsable` / `pass_output_invalid`, writes
+**no** artifact and updates **no** status — so the stage stays exactly as
+retryable as it was, and the paid response is always on disk. Sequence numbers
+are monotonic and derived from disk, so a retry never overwrites the earlier
+attempt. An empty candidate list no longer advances a run to scope approval.
+
+Resumability per stage: a failed **landscape** is retried in place with
+`relandscape <run_id> --approve-paid --yes` (same run, mandate and approval; it
+refuses if a landscape already exists). A failed **research** leaves the target
+in the pending queue — neither accepted nor rejected — so `research` resumes at
+exactly that manager. A failed **deep dive** leaves the inherited parent graph
+byte-identical.
+
+`extraction.extract_json` is a **port** of `src.model_router.extract_json`, not
+an import: the pack may not touch `src/` outside `live_pass.py`. The two are
+pinned by `TestExtractorMatchesCompanyPrimitive`, which runs both over the same
+provider-shaped battery (plain, fenced, unlabelled-fence, prose-wrapped, nested,
+unicode, truncated, unbalanced, empty) asserting identical values *and* identical
+failures, plus a whitespace-insensitive source comparison. If the boundary is
+ever relaxed, the port collapses to an import.
+
+**3. One consequential model fix.** A portfolio entry could only carry
+`evidence: [<ids>]` — ids `build_graph` generates itself, which a model cannot
+know, so every model-produced portfolio relationship would have tripped
+`unsupported-relationship`. Portfolio entries now accept a `source` URL like
+every other claim; pre-resolved ids still work for inherited/patched graphs.
+
+**Tests: 434 total, 2 skipped** (was 406) — +26 Funds contract tests, +2 adapter
+equivalence tests. The new tests fail against the pre-fix controller. Coverage:
+provider-shaped plain/fenced/unlabelled/prose/nested replies accepted; prose-only,
+truncated, wrong-shape and empty replies refused with the raw kept and the run
+state unadvanced; the ledger records the raw filename; retry-after-failure
+preserves both responses; all three stages persist raw; research/deep-dive
+malformed handling; prompts declare every consumed schema key and are built from
+the persisted mandate.
+
+## Next milestone — the first CONTROLLED LIVE Funds test (retry, not executed)
 
 **Mandate.** "Find European private equity managers investing in B2B software and
 tech-enabled services, with evidence of active buy-and-build activity during
@@ -329,14 +438,27 @@ landscape scope approval → one manager per safe step → pause/stop/resume via
 ```bash
 python -m funds_intelligence preview                       # free, read-only
 python -m funds_intelligence live --approve-paid --yes     # creates run + landscape, then STOPS
+# if the landscape pass returns unusable output, the raw response is kept and
+# the run does not advance — retry that ONE stage in place:
+python -m funds_intelligence relandscape <run_id> --approve-paid --yes
 python -m funds_intelligence approve <run_id> --targets "A" "B" "C"
 python -m funds_intelligence research <run_id> --yes       # one manager per step
 python -m funds_intelligence deepdive <run_id> --target "A" --yes
 python -m funds_intelligence status <run_id>
 ```
 
-**What to inspect afterwards:** `pass_usage` events (tokens/tool calls/searches
-per stage), `target_researched` verdicts + codes, whether the 8 rules fire on
-real sources and any false positives, whether grounding downgraded an ungrounded
-AUM/fund-size, manager-vs-vehicle typing in `landscape.json`, and the
-search error/rate-limit counters.
+**What to inspect afterwards:** `raw/` (what the provider actually returned,
+now always kept), `pass_usage` events (tokens/tool calls/searches per stage),
+`target_researched` verdicts + codes, whether the 8 rules fire on real sources
+and any false positives, whether grounding downgraded an ungrounded AUM/fund-
+size, manager-vs-vehicle typing in `landscape.json`, and the search
+error/rate-limit counters.
+
+**Known semantic mismatch, left unchanged deliberately.** `run_landscape` filters
+candidates through `mandate.in_window(c.get("vintage"))`, but for this mandate
+the window constrains *buy-and-build activity*, not a fund vintage. Landscape
+candidates are management companies, which carry no vintage — and
+`in_window(None)` returns True — so the filter is a no-op here rather than a
+silent dropper of good candidates. The prompt reinforces this by forbidding a
+`vintage` field on a candidate. Worth revisiting when a mandate genuinely wants
+vintage-filtered candidates; not worth changing mid-validation.
